@@ -18,6 +18,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(request.issue_body, "")
         self.assertEqual(request.comment_body, "")
         self.assertEqual(request.comment_author, "unknown")
+        self.assertEqual(request.comment_id, 0)
 
     def test_build_issue_request_reads_event_payload(self) -> None:
         request = build_issue_request(
@@ -30,6 +31,7 @@ class BotTest(unittest.TestCase):
                 },
                 "comment": {
                     "body": "/bot run",
+                    "id": 34,
                     "user": {"login": "IncleRepo"},
                 },
             }
@@ -41,6 +43,7 @@ class BotTest(unittest.TestCase):
         self.assertEqual(request.issue_body, "요구사항")
         self.assertEqual(request.comment_body, "/bot run")
         self.assertEqual(request.comment_author, "IncleRepo")
+        self.assertEqual(request.comment_id, 34)
 
     def test_build_branch_name_is_stable(self) -> None:
         request = IssueRequest(
@@ -50,9 +53,10 @@ class BotTest(unittest.TestCase):
             issue_body="",
             comment_body="/bot run",
             comment_author="IncleRepo",
+            comment_id=34,
         )
 
-        self.assertEqual(build_branch_name(request), "bot/issue-12-add-github-pr-flow")
+        self.assertEqual(build_branch_name(request), "bot/issue-12-comment-34-add-github-pr-flow")
 
 
 if __name__ == "__main__":

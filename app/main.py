@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from app.bot import build_branch_name, build_issue_request, build_task_prompt, should_run_bot
+from app.github_pr import create_test_pr
 
 
 def load_event_payload() -> dict:
@@ -14,6 +15,7 @@ def load_event_payload() -> dict:
             "action": "created",
             "comment": {
                 "body": "/bot run",
+                "id": 1,
                 "user": {"login": "local-user"},
             },
             "issue": {
@@ -48,6 +50,13 @@ def main() -> None:
     print(f"작업 브랜치: {branch_name}")
     print("작업 프롬프트:")
     print(task_prompt)
+
+    if os.getenv("BOT_CREATE_PR") != "1":
+        print("BOT_CREATE_PR이 1이 아니므로 PR 생성은 건너뜁니다.")
+        return
+
+    result = create_test_pr(request, Path.cwd())
+    print(f"PR 생성 완료: {result.pull_request_url}")
 
 
 if __name__ == "__main__":

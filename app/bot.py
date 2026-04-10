@@ -14,6 +14,7 @@ class IssueRequest:
     issue_body: str
     comment_body: str
     comment_author: str
+    comment_id: int
 
 
 def should_run_bot(comment_body: str) -> bool:
@@ -32,6 +33,7 @@ def build_issue_request(payload: dict) -> IssueRequest:
         issue_body=issue.get("body") or "",
         comment_body=comment.get("body") or "",
         comment_author=(comment.get("user") or {}).get("login") or "unknown",
+        comment_id=int(comment.get("id") or 0),
     )
 
 
@@ -39,7 +41,8 @@ def build_branch_name(request: IssueRequest) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", request.issue_title.lower()).strip("-")
     if not slug:
         slug = "issue"
-    return f"bot/issue-{request.issue_number}-{slug[:40]}"
+    suffix = f"-comment-{request.comment_id}" if request.comment_id else ""
+    return f"bot/issue-{request.issue_number}{suffix}-{slug[:40]}"
 
 
 def build_task_prompt(request: IssueRequest) -> str:

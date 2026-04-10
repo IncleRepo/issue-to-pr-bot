@@ -7,7 +7,10 @@ WORKDIR /workspace
 
 COPY requirements.txt /tmp/requirements.txt
 
-RUN python -m pip install --upgrade pip \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --upgrade pip \
     && pip install --no-cache-dir -r /tmp/requirements.txt
 
 RUN useradd --create-home --shell /usr/sbin/nologin bot
