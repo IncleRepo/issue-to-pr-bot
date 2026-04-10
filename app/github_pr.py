@@ -18,9 +18,9 @@ class PullRequestResult:
 
 
 def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
-    token = os.getenv("GITHUB_TOKEN")
+    token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
-        raise RuntimeError("GITHUB_TOKEN이 없어 PR을 생성할 수 없습니다.")
+        raise RuntimeError("BOT_GITHUB_TOKEN 또는 GITHUB_TOKEN이 없어 PR을 생성할 수 없습니다.")
 
     repository = os.getenv("GITHUB_REPOSITORY") or request.repository
     base_branch = os.getenv("GITHUB_REF_NAME") or "main"
@@ -91,7 +91,16 @@ def configure_git(workspace: Path) -> None:
 
 def has_staged_changes(workspace: Path) -> bool:
     result = subprocess.run(
-        ["git", "-c", f"safe.directory={workspace}", "diff", "--cached", "--quiet"],
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "diff",
+            "--cached",
+            "--quiet",
+        ],
         cwd=workspace,
         check=False,
     )
@@ -100,7 +109,14 @@ def has_staged_changes(workspace: Path) -> bool:
 
 def push_branch(repository: str, branch_name: str, token: str, workspace: Path) -> None:
     push_url = f"https://x-access-token:{token}@github.com/{repository}.git"
-    run_git(["push", "--force-with-lease", push_url, f"HEAD:{branch_name}"], workspace, mask=token)
+    try:
+        run_git(["push", "--force-with-lease", push_url, f"HEAD:{branch_name}"], workspace, mask=token)
+    except RuntimeError as error:
+        raise RuntimeError(
+            "브랜치 push에 실패했습니다. GitHub Actions의 Workflow permissions가 "
+            "'Read and write permissions'인지 확인하거나, 쓰기 권한이 있는 PAT를 "
+            "BOT_GITHUB_TOKEN secret으로 설정해야 합니다."
+        ) from error
 
 
 def ensure_pull_request(
@@ -187,7 +203,7 @@ def github_request(method: str, path: str, token: str, payload: dict | None = No
 
 
 def run_git(args: list[str], workspace: Path, mask: str | None = None) -> None:
-    command = ["git", "-c", f"safe.directory={workspace}", *args]
+    command = ["git", "-c", f"safe.directory={workspace}", "-c", "core.autocrlf=false", *args]
     result = subprocess.run(
         command,
         cwd=workspace,

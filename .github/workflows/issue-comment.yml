@@ -55,6 +55,10 @@ jobs:
             -e GITHUB_REPOSITORY="${env:GITHUB_REPOSITORY}" `
             -e GITHUB_REF_NAME="${env:GITHUB_REF_NAME}" `
             -e GITHUB_TOKEN="${env:GITHUB_TOKEN}" `
+            -e BOT_GITHUB_TOKEN="${env:BOT_GITHUB_TOKEN}" `
             -v "${env:GITHUB_WORKSPACE}:/workspace" `
             -v "${env:GITHUB_EVENT_PATH}:/tmp/github_event.json:ro" `
             issue-to-pr-bot:ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOT_GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
