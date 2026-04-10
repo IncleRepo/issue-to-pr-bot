@@ -88,11 +88,11 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         return
 
     if command.action == "plan":
-        result = run_codex_plan(request, workspace, config)
+        result = run_codex_plan(request, workspace, config, command)
         post_plan_comment(request, config, command, result.output)
         return
 
-    result = run_configured_mode(config.mode, request, workspace)
+    result = run_configured_mode(config.mode, request, workspace, command)
     if result.created:
         print(f"PR 생성 완료: {result.pull_request_url}")
         post_success_comment(request, config, result)
@@ -102,12 +102,17 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     post_no_changes_comment(request, config, result)
 
 
-def run_configured_mode(mode: str, request: IssueRequest, workspace: Path) -> PullRequestResult:
+def run_configured_mode(
+    mode: str,
+    request: IssueRequest,
+    workspace: Path,
+    command: BotCommand | None = None,
+) -> PullRequestResult:
     normalized_mode = mode.strip().lower()
     if normalized_mode == "test-pr":
         return create_test_pr(request, workspace)
     if normalized_mode == "codex":
-        return create_codex_pr(request, workspace)
+        return create_codex_pr(request, workspace, command)
     raise RuntimeError(f"지원하지 않는 봇 모드입니다: {mode}")
 
 
