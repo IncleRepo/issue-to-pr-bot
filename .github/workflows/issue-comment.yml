@@ -34,6 +34,13 @@ jobs:
           git -c core.autocrlf=false reset --hard HEAD
           git status --short
 
+      - name: GitHub App 토큰 생성
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
       - name: Docker 이미지 빌드
         run: docker build -t issue-to-pr-bot:ci .
 
@@ -93,5 +100,5 @@ jobs:
             sh -lc "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && python -m app.main"
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BOT_GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          BOT_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
