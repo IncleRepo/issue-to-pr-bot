@@ -42,6 +42,34 @@ jobs:
             issue-to-pr-bot:ci `
             python -m app.run_configured_command
 
+      - name: Codex 인증 확인
+        shell: powershell
+        run: |
+          $codexHome = if ($env:CODEX_HOME_HOST) { $env:CODEX_HOME_HOST } else { Join-Path $env:USERPROFILE ".codex" }
+          $authPath = Join-Path $codexHome "auth.json"
+          $configPath = Join-Path $codexHome "config.toml"
+
+          if (-not (Test-Path -LiteralPath $authPath)) {
+            throw "Codex auth.json 파일을 찾을 수 없습니다: $authPath"
+          }
+
+          if (-not (Test-Path -LiteralPath $configPath)) {
+            throw "Codex config.toml 파일을 찾을 수 없습니다: $configPath"
+          }
+
+          docker run --rm `
+            --read-only `
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m `
+            --tmpfs /home/bot/.codex:rw,noexec,nosuid,size=8m,uid=1000,gid=1000 `
+            --cap-drop ALL `
+            --security-opt no-new-privileges `
+            -v "${authPath}:/run/codex-auth/auth.json:ro" `
+            -v "${configPath}:/run/codex-auth/config.toml:ro" `
+            issue-to-pr-bot:ci `
+            sh -lc "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && codex --version && codex login status"
+        env:
+          CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
+
       - name: 봇 실행
         shell: powershell
         run: |

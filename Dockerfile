@@ -8,12 +8,16 @@ WORKDIR /workspace
 COPY requirements.txt /tmp/requirements.txt
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates git \
+    && apt-get install --no-install-recommends -y ca-certificates git nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && npm install -g @openai/codex@0.118.0
 
-RUN useradd --create-home --shell /usr/sbin/nologin bot
+RUN useradd --create-home --shell /usr/sbin/nologin bot \
+    && mkdir -p /home/bot/.codex \
+    && mkdir -p /run/codex-auth \
+    && chown -R bot:bot /home/bot/.codex
 
 USER bot
 
