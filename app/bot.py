@@ -18,7 +18,15 @@ class IssueRequest:
 
 def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
     config = config or BotConfig()
-    return config.command in comment_body
+    return config.command in comment_body or should_run_for_mention(comment_body, config)
+
+
+def should_run_for_mention(comment_body: str, config: BotConfig | None = None) -> bool:
+    config = config or BotConfig()
+    mention = config.mention.strip()
+    if not mention:
+        return False
+    return re.search(rf"(^|\s){re.escape(mention)}(\s|$|[,.!?])", comment_body, re.IGNORECASE) is not None
 
 
 def build_issue_request(payload: dict) -> IssueRequest:

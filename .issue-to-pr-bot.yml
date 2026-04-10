@@ -1,5 +1,6 @@
 bot:
   command: "/bot run"
+  mention: "@incle-issue-to-pr-bot"
   branch_prefix: "bot"
   output_dir: "bot-output"
   test_command: "python -m unittest discover -s tests"

@@ -11,6 +11,7 @@ class ConfigTest(unittest.TestCase):
             """
 bot:
   command: "/ai go"
+  mention: "@agent-bot"
   branch_prefix: "agent"
   output_dir: "agent-output"
   test_command: "python -m unittest"
@@ -24,6 +25,7 @@ bot:
         )
 
         self.assertEqual(values["command"], "/ai go")
+        self.assertEqual(values["mention"], "@agent-bot")
         self.assertEqual(values["branch_prefix"], "agent")
         self.assertEqual(values["output_dir"], "agent-output")
         self.assertEqual(values["test_command"], "python -m unittest")
@@ -51,6 +53,7 @@ bot:
             config = load_config(Path(temp_dir))
 
         self.assertEqual(config.command, "/ai go")
+        self.assertEqual(config.mention, "@incle-issue-to-pr-bot")
         self.assertEqual(config.branch_prefix, "agent")
         self.assertEqual(config.output_dir, "bot-output")
         self.assertIn("README.md", config.context_paths)

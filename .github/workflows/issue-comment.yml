@@ -12,7 +12,10 @@ permissions:
 jobs:
   run-bot:
     if: >
-      contains(github.event.comment.body, '/bot run') &&
+      (
+        contains(github.event.comment.body, '/bot run') ||
+        contains(github.event.comment.body, '@incle-issue-to-pr-bot')
+      ) &&
       github.event.issue.pull_request == null &&
       (
         github.event.comment.author_association == 'OWNER' ||
