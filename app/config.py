@@ -40,6 +40,7 @@ class BotConfig:
     branch_prefix: str = "bot"
     output_dir: str = "bot-output"
     test_command: str = "python -m unittest discover -s tests"
+    check_commands: list[str] = field(default_factory=list)
     mode: str = "test-pr"
     context_paths: list[str] = field(default_factory=lambda: DEFAULT_CONTEXT_PATHS.copy())
     protected_paths: list[str] = field(default_factory=lambda: DEFAULT_PROTECTED_PATHS.copy())
@@ -59,10 +60,30 @@ def load_config(workspace: Path) -> BotConfig:
         branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
         output_dir=values.get("output_dir", defaults.output_dir),
         test_command=values.get("test_command", defaults.test_command),
+        check_commands=as_string_list(values.get("check_commands"), defaults.check_commands),
         mode=values.get("mode", defaults.mode),
-        context_paths=values.get("context_paths", defaults.context_paths),
-        protected_paths=values.get("protected_paths", defaults.protected_paths),
+        context_paths=as_string_list(values.get("context_paths"), defaults.context_paths),
+        protected_paths=as_string_list(values.get("protected_paths"), defaults.protected_paths),
     )
+
+
+def get_check_commands(config: BotConfig) -> list[str]:
+    commands = [command.strip() for command in config.check_commands if command.strip()]
+    if commands:
+        return commands
+
+    fallback = config.test_command.strip()
+    return [fallback] if fallback else []
+
+
+def as_string_list(value: object, fallback: list[str]) -> list[str]:
+    if value is None:
+        return fallback.copy()
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return fallback.copy()
 
 
 def parse_simple_bot_config(config_text: str) -> dict[str, str | list[str]]:

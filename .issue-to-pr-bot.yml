@@ -5,6 +5,9 @@ bot:
   branch_prefix: "bot"
   output_dir: "bot-output"
   test_command: "python -m unittest discover -s tests"
+  check_commands:
+    - "python -m compileall -q app tests"
+    - "python -m unittest discover -s tests"
   mode: "codex"
   context_paths:
     - ".issue-to-pr-bot.yml"

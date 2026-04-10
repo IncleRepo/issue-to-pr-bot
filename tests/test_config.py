@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.config import BotConfig, load_config, parse_simple_bot_config
+from app.config import BotConfig, get_check_commands, load_config, parse_simple_bot_config
 
 
 class ConfigTest(unittest.TestCase):
@@ -16,6 +16,9 @@ bot:
   branch_prefix: "agent"
   output_dir: "agent-output"
   test_command: "python -m unittest"
+  check_commands:
+    - "python -m unittest"
+    - "python -m compileall -q app tests"
   mode: "codex"
   context_paths:
     - "README.md"
@@ -31,6 +34,10 @@ bot:
         self.assertEqual(values["branch_prefix"], "agent")
         self.assertEqual(values["output_dir"], "agent-output")
         self.assertEqual(values["test_command"], "python -m unittest")
+        self.assertEqual(
+            values["check_commands"],
+            ["python -m unittest", "python -m compileall -q app tests"],
+        )
         self.assertEqual(values["mode"], "codex")
         self.assertEqual(values["context_paths"], ["README.md", "docs"])
         self.assertEqual(values["protected_paths"], [".github/workflows/**"])
@@ -60,6 +67,19 @@ bot:
         self.assertEqual(config.output_dir, "bot-output")
         self.assertIn("README.md", config.context_paths)
         self.assertIn(".github/workflows/**", config.protected_paths)
+
+    def test_get_check_commands_prefers_explicit_commands(self) -> None:
+        config = BotConfig(
+            test_command="python -m unittest",
+            check_commands=["python -m compileall -q app tests"],
+        )
+
+        self.assertEqual(get_check_commands(config), ["python -m compileall -q app tests"])
+
+    def test_get_check_commands_falls_back_to_test_command(self) -> None:
+        config = BotConfig(test_command="python -m unittest")
+
+        self.assertEqual(get_check_commands(config), ["python -m unittest"])
 
 
 if __name__ == "__main__":

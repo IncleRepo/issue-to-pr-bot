@@ -14,9 +14,10 @@ This repository is maintained with an issue-driven automation workflow. Agents m
 
 ## Verification
 
-Run the configured verification command before opening a PR:
+Run all configured verification commands before opening a PR:
 
 ```powershell
+python -m compileall -q app tests
 python -m unittest discover -s tests
 ```
 

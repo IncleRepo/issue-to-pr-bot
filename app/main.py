@@ -13,9 +13,9 @@ from app.bot import (
     parse_bot_command,
 )
 from app.codex_runner import create_codex_pr, run_codex_plan
-from app.config import BotConfig, load_config
+from app.config import BotConfig, get_check_commands, load_config
 from app.github_pr import PullRequestResult, create_issue_comment, create_test_pr
-from app.repo_context import collect_context_documents, format_context_documents
+from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
 from app.verification import VerificationError
 
 
@@ -67,7 +67,8 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     branch_name = build_branch_name(request, config)
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
-    task_prompt = build_task_prompt(request, config, repository_context)
+    project_summary = collect_project_summary(workspace)
+    task_prompt = build_task_prompt(request, config, repository_context, project_summary)
 
     print("봇 실행 시작")
     print(f"저장소: {request.repository}")
@@ -77,7 +78,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     print(f"댓글 작성자: {request.comment_author}")
     print(f"봇 모드: {config.mode}")
     print(f"봇 명령: {command.action}")
-    print(f"검증 명령: {config.test_command}")
+    print(f"검증 명령: {format_check_commands(config)}")
     print(f"작업 브랜치: {branch_name}")
     print(f"저장소 규칙 문서: {len(documents)}개")
     print("작업 프롬프트:")
@@ -148,7 +149,7 @@ def post_success_comment(request: IssueRequest, config: BotConfig, result: PullR
             f"- 모드: `{config.mode}`",
             f"- 브랜치: `{result.branch_name}`",
             f"- PR: {result.pull_request_url}",
-            f"- 검증: `{config.test_command}` 통과",
+            f"- 검증: {format_check_commands(config)} 통과",
             "",
             "변경 파일:",
             format_changed_files(result.changed_files),
@@ -199,6 +200,13 @@ def format_changed_files(changed_files: list[str]) -> str:
     if len(changed_files) > len(displayed):
         lines.append(f"- 외 {len(changed_files) - len(displayed)}개")
     return "\n".join(lines)
+
+
+def format_check_commands(config: BotConfig) -> str:
+    commands = get_check_commands(config)
+    if not commands:
+        return "`none`"
+    return ", ".join(f"`{command}`" for command in commands)
 
 
 def format_failure_detail(error: Exception) -> str:

@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.config import BotConfig
+from app.config import BotConfig, get_check_commands
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,7 @@ def build_task_prompt(
     request: IssueRequest,
     config: BotConfig | None = None,
     repository_context: str | None = None,
+    project_summary: str | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -138,6 +139,9 @@ def build_task_prompt(
             "Trigger comment:",
             request.comment_body.strip(),
             "",
+            "Project structure:",
+            project_summary or "No project structure summary was provided.",
+            "",
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
             "",
@@ -147,7 +151,8 @@ def build_task_prompt(
             "- Keep the change focused on the issue request.",
             "- Follow the repository guidance documents when they apply.",
             "- If the issue conflicts with repository guidance, prefer the repository guidance and explain the conflict.",
-            f"- Run this verification command before opening a PR: {config.test_command}",
+            "- Run all verification commands before opening a PR:",
+            format_check_commands(get_check_commands(config)),
         ]
     )
 
@@ -156,6 +161,7 @@ def build_plan_prompt(
     request: IssueRequest,
     config: BotConfig | None = None,
     repository_context: str | None = None,
+    project_summary: str | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -177,8 +183,14 @@ def build_plan_prompt(
             "Trigger comment:",
             request.comment_body.strip(),
             "",
+            "Project structure:",
+            project_summary or "No project structure summary was provided.",
+            "",
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
+            "",
+            "Configured verification commands:",
+            format_check_commands(get_check_commands(config)),
             "",
             "Return a concise Korean plan with:",
             "- likely files to inspect or change",
@@ -187,3 +199,9 @@ def build_plan_prompt(
             "- blockers or missing context, if any",
         ]
     )
+
+
+def format_check_commands(commands: list[str]) -> str:
+    if not commands:
+        return "- No verification commands are configured."
+    return "\n".join(f"- {command}" for command in commands)

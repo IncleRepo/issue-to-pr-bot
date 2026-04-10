@@ -6,7 +6,7 @@ from pathlib import Path
 from app.bot import BotCommand, IssueRequest, build_plan_prompt, build_task_prompt
 from app.config import BotConfig, load_config
 from app.github_pr import PullRequestResult, checkout_bot_branch, commit_push_and_open_pr
-from app.repo_context import collect_context_documents, format_context_documents
+from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
 from app.verification import run_verification
 
 
@@ -46,7 +46,8 @@ def run_codex(
 ) -> CodexRunResult:
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
-    prompt = build_task_prompt(request, config, repository_context)
+    project_summary = collect_project_summary(workspace)
+    prompt = build_task_prompt(request, config, repository_context, project_summary)
     command = build_codex_command(workspace, effort=get_effort(bot_command))
 
     print(f"저장소 규칙 문서 {len(documents)}개를 프롬프트에 포함합니다.")
@@ -79,7 +80,8 @@ def run_codex_plan(
 ) -> CodexRunResult:
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
-    prompt = build_plan_prompt(request, config, repository_context)
+    project_summary = collect_project_summary(workspace)
+    prompt = build_plan_prompt(request, config, repository_context, project_summary)
     output_path = Path(tempfile.gettempdir()) / "issue-to-pr-bot-codex-plan.txt"
     command = build_codex_command(
         workspace,

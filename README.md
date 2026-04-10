@@ -54,10 +54,15 @@ Pull Request 생성
 ```yaml
 bot:
   command: "/bot run"
+  plan_command: "/bot plan"
+  mention: "@incle-issue-to-pr-bot"
   branch_prefix: "bot"
   output_dir: "bot-output"
   test_command: "python -m unittest discover -s tests"
-  mode: "test-pr"
+  check_commands:
+    - "python -m compileall -q app tests"
+    - "python -m unittest discover -s tests"
+  mode: "codex"
 ```
 
 ## 📌 향후 확장 계획
