@@ -31,7 +31,7 @@ jobs:
         run: docker build -t issue-to-pr-bot:ci .
 
       - name: 봇 실행
-        shell: pwsh
+        shell: powershell
         run: |
           docker run --rm `
             --read-only `
