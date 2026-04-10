@@ -27,6 +27,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Git 줄바꿈 정규화
+        shell: powershell
+        run: |
+          git config core.autocrlf false
+          git -c core.autocrlf=false reset --hard HEAD
+          git status --short
+
       - name: Docker 이미지 빌드
         run: docker build -t issue-to-pr-bot:ci .
 
@@ -77,6 +84,7 @@ jobs:
             -e GITHUB_REF_NAME="${env:GITHUB_REF_NAME}" `
             -e GITHUB_TOKEN="${env:GITHUB_TOKEN}" `
             -e BOT_GITHUB_TOKEN="${env:BOT_GITHUB_TOKEN}" `
+            -e BOT_RESET_WORKTREE=1 `
             -v "${env:GITHUB_WORKSPACE}:/workspace" `
             -v "${env:GITHUB_EVENT_PATH}:/tmp/github_event.json:ro" `
             -v "${authPath}:/run/codex-auth/auth.json:ro" `

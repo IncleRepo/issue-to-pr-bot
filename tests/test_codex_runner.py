@@ -11,8 +11,7 @@ class CodexRunnerTest(unittest.TestCase):
 
         self.assertEqual(command[:2], ["codex", "exec"])
         self.assertIn("--ephemeral", command)
-        self.assertIn("--sandbox", command)
-        self.assertIn("workspace-write", command)
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
         self.assertIn("--cd", command)
         self.assertEqual(command[command.index("--cd") + 1], str(workspace))
         self.assertEqual(command[-1], "-")

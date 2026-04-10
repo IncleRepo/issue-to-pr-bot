@@ -37,7 +37,17 @@ def checkout_bot_branch(request: IssueRequest, workspace: Path, config: BotConfi
     branch_name = build_branch_name(request, config)
     configure_git(workspace)
     run_git(["checkout", "-B", branch_name], workspace)
+    reset_worktree_if_requested(workspace)
     return branch_name
+
+
+def reset_worktree_if_requested(workspace: Path) -> None:
+    if os.getenv("BOT_RESET_WORKTREE") != "1":
+        return
+
+    print("작업 브랜치 초기 상태를 HEAD 기준으로 정리합니다.")
+    run_git(["reset", "--hard", "HEAD"], workspace)
+    run_git(["clean", "-fd"], workspace)
 
 
 def commit_push_and_open_pr(
