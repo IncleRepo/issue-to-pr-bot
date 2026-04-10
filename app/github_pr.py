@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.bot import IssueRequest, build_branch_name, build_task_prompt
+from app.config import BotConfig, load_config
 
 
 @dataclass(frozen=True)
@@ -18,19 +19,20 @@ class PullRequestResult:
 
 
 def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
+    config = load_config(workspace)
     token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("BOT_GITHUB_TOKEN 또는 GITHUB_TOKEN이 없어 PR을 생성할 수 없습니다.")
 
     repository = os.getenv("GITHUB_REPOSITORY") or request.repository
     base_branch = os.getenv("GITHUB_REF_NAME") or "main"
-    branch_name = build_branch_name(request)
+    branch_name = build_branch_name(request, config)
 
-    write_marker_file(request, workspace)
+    write_marker_file(request, workspace, config)
     configure_git(workspace)
 
     run_git(["checkout", "-B", branch_name], workspace)
-    run_git(["add", "bot-output"], workspace)
+    run_git(["add", config.output_dir], workspace)
 
     if has_staged_changes(workspace):
         run_git(["commit", "-m", f"chore: issue #{request.issue_number} 작업 기록"], workspace)
@@ -38,7 +40,7 @@ def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
         print("커밋할 변경사항이 없습니다.")
 
     push_branch(repository, branch_name, token, workspace)
-    pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token)
+    pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token, config)
 
     return PullRequestResult(
         branch_name=branch_name,
@@ -47,8 +49,13 @@ def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
     )
 
 
-def write_marker_file(request: IssueRequest, workspace: Path) -> Path:
-    output_dir = workspace / "bot-output"
+def write_marker_file(
+    request: IssueRequest,
+    workspace: Path,
+    config: BotConfig | None = None,
+) -> Path:
+    config = config or BotConfig()
+    output_dir = workspace / config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = output_dir / f"issue-{request.issue_number}.md"
@@ -61,7 +68,7 @@ def write_marker_file(request: IssueRequest, workspace: Path) -> Path:
                 f"- Title: {request.issue_title}",
                 f"- Comment author: {request.comment_author}",
                 f"- Comment id: {request.comment_id}",
-                f"- Branch: {build_branch_name(request)}",
+                f"- Branch: {build_branch_name(request, config)}",
                 "",
                 "## Issue Body",
                 "",
@@ -74,7 +81,7 @@ def write_marker_file(request: IssueRequest, workspace: Path) -> Path:
                 "## Generated Task Prompt",
                 "",
                 "```text",
-                build_task_prompt(request),
+                build_task_prompt(request, config),
                 "```",
                 "",
             ]
@@ -125,6 +132,7 @@ def ensure_pull_request(
     base_branch: str,
     request: IssueRequest,
     token: str,
+    config: BotConfig,
 ) -> str:
     existing_url = find_existing_pull_request(repository, branch_name, base_branch, token)
     if existing_url:
@@ -136,7 +144,7 @@ def ensure_pull_request(
         [
             f"Closes #{request.issue_number}",
             "",
-            "이 PR은 `/bot run` 테스트 파이프라인으로 자동 생성되었습니다.",
+            f"이 PR은 `{config.command}` 테스트 파이프라인으로 자동 생성되었습니다.",
             "현재 단계에서는 Codex 실행 전 브랜치/커밋/PR 생성 흐름만 검증합니다.",
         ]
     )

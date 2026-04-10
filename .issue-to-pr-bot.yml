@@ -1,0 +1,6 @@
+bot:
+  command: "/bot run"
+  branch_prefix: "bot"
+  output_dir: "bot-output"
+  test_command: "python -m unittest discover -s tests"
+  mode: "test-pr"

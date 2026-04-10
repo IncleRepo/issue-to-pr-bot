@@ -1,6 +1,7 @@
 import unittest
 
 from app.bot import IssueRequest, build_branch_name, build_issue_request, should_run_bot
+from app.config import BotConfig
 
 
 class BotTest(unittest.TestCase):
@@ -8,6 +9,7 @@ class BotTest(unittest.TestCase):
         self.assertTrue(should_run_bot("/bot run"))
         self.assertTrue(should_run_bot("please /bot run this"))
         self.assertFalse(should_run_bot("/bot help"))
+        self.assertTrue(should_run_bot("/ai go", BotConfig(command="/ai go")))
 
     def test_build_issue_request_handles_missing_values(self) -> None:
         request = build_issue_request({})
@@ -57,6 +59,21 @@ class BotTest(unittest.TestCase):
         )
 
         self.assertEqual(build_branch_name(request), "bot/issue-12-comment-34-add-github-pr-flow")
+
+    def test_build_branch_name_uses_configured_prefix(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=12,
+            issue_title="Add GitHub PR flow!",
+            issue_body="",
+            comment_body="/bot run",
+            comment_author="IncleRepo",
+            comment_id=34,
+        )
+
+        config = BotConfig(branch_prefix="agent")
+
+        self.assertEqual(build_branch_name(request, config), "agent/issue-12-comment-34-add-github-pr-flow")
 
 
 if __name__ == "__main__":

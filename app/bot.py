@@ -2,8 +2,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-
-BOT_COMMAND = "/bot run"
+from app.config import BotConfig
 
 
 @dataclass(frozen=True)
@@ -17,8 +16,9 @@ class IssueRequest:
     comment_id: int
 
 
-def should_run_bot(comment_body: str) -> bool:
-    return BOT_COMMAND in comment_body
+def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
+    config = config or BotConfig()
+    return config.command in comment_body
 
 
 def build_issue_request(payload: dict) -> IssueRequest:
@@ -37,19 +37,21 @@ def build_issue_request(payload: dict) -> IssueRequest:
     )
 
 
-def build_branch_name(request: IssueRequest) -> str:
+def build_branch_name(request: IssueRequest, config: BotConfig | None = None) -> str:
+    config = config or BotConfig()
     slug = re.sub(r"[^a-z0-9]+", "-", request.issue_title.lower()).strip("-")
     if not slug:
         slug = "issue"
     suffix = f"-comment-{request.comment_id}" if request.comment_id else ""
-    return f"bot/issue-{request.issue_number}{suffix}-{slug[:40]}"
+    return f"{config.branch_prefix}/issue-{request.issue_number}{suffix}-{slug[:40]}"
 
 
-def build_task_prompt(request: IssueRequest) -> str:
+def build_task_prompt(request: IssueRequest, config: BotConfig | None = None) -> str:
+    config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
     return "\n".join(
         [
-            "You are working in the issue-to-pr-bot repository.",
+            f"You are working in the {request.repository} repository.",
             "Implement the requested change from this GitHub issue.",
             "",
             f"Repository: {request.repository}",
@@ -68,6 +70,6 @@ def build_task_prompt(request: IssueRequest) -> str:
             "- Create changes on a dedicated branch only.",
             "- Do not push directly to main.",
             "- Keep the change focused on the issue request.",
-            "- Run available tests or checks before opening a PR.",
+            f"- Run this verification command before opening a PR: {config.test_command}",
         ]
     )

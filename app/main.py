@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from app.bot import build_branch_name, build_issue_request, build_task_prompt, should_run_bot
+from app.config import load_config
 from app.github_pr import create_test_pr
 
 
@@ -31,15 +32,16 @@ def load_event_payload() -> dict:
 
 
 def main() -> None:
+    config = load_config(Path.cwd())
     payload = load_event_payload()
     request = build_issue_request(payload)
 
-    if not should_run_bot(request.comment_body):
+    if not should_run_bot(request.comment_body, config):
         print("봇 실행 명령이 없어서 종료합니다.")
         return
 
-    branch_name = build_branch_name(request)
-    task_prompt = build_task_prompt(request)
+    branch_name = build_branch_name(request, config)
+    task_prompt = build_task_prompt(request, config)
 
     print("봇 실행 시작")
     print(f"저장소: {request.repository}")
@@ -47,6 +49,8 @@ def main() -> None:
     print(f"이슈 제목: {request.issue_title}")
     print(f"이슈 본문: {request.issue_body}")
     print(f"댓글 작성자: {request.comment_author}")
+    print(f"봇 모드: {config.mode}")
+    print(f"검증 명령: {config.test_command}")
     print(f"작업 브랜치: {branch_name}")
     print("작업 프롬프트:")
     print(task_prompt)

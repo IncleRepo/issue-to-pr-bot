@@ -47,6 +47,19 @@ Pull Request 생성
 - 최소 권한 기반 실행
 - 봇 실행은 Docker 컨테이너 내부에서 격리
 
+## 🛠️ 저장소별 설정
+
+`.issue-to-pr-bot.yml`에서 저장소별 실행 옵션을 조정합니다.
+
+```yaml
+bot:
+  command: "/bot run"
+  branch_prefix: "bot"
+  output_dir: "bot-output"
+  test_command: "python -m unittest discover -s tests"
+  mode: "test-pr"
+```
+
 ## 📌 향후 확장 계획
 
 - PR 리뷰 코멘트 자동 반영

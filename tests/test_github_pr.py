@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from app.bot import IssueRequest
+from app.config import BotConfig
 from app.github_pr import write_marker_file
 
 
@@ -19,10 +20,15 @@ class GitHubPrTest(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            output_file = write_marker_file(request, Path(temp_dir))
+            output_file = write_marker_file(
+                request,
+                Path(temp_dir),
+                BotConfig(output_dir="custom-output"),
+            )
             content = output_file.read_text(encoding="utf-8")
 
         self.assertEqual(output_file.name, "issue-3.md")
+        self.assertEqual(output_file.parent.name, "custom-output")
         self.assertIn("# Issue #3", content)
         self.assertIn("요구사항 본문", content)
         self.assertIn("bot/issue-3-comment-99-add-sample-output", content)
