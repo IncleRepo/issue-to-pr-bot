@@ -60,6 +60,17 @@ bot:
   mode: "test-pr"
 ```
 
+## 💻 로컬 실행 방법
+
+Windows PowerShell에서 다음 명령어를 실행합니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m app.main
+```
+
 ## 📌 향후 확장 계획
 
 - PR 리뷰 코멘트 자동 반영
