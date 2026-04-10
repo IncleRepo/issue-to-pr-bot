@@ -6,8 +6,15 @@ on:
 
 jobs:
   run-bot:
-    if: contains(github.event.comment.body, '/bot run')
-    runs-on: ubuntu-latest
+    if: >
+      contains(github.event.comment.body, '/bot run') &&
+      github.event.issue.pull_request == null &&
+      (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: [self-hosted, Windows]
 
     steps:
       - name: 코드 체크아웃
