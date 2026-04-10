@@ -2,10 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run app/main.py",
+      "name": "Run app.main",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}\\app\\main.py",
+      "module": "app.main",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "justMyCode": true

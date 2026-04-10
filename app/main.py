@@ -2,43 +2,52 @@ import json
 import os
 from pathlib import Path
 
+from app.bot import build_branch_name, build_issue_request, build_task_prompt, should_run_bot
 
-def load_event_payload():
+
+def load_event_payload() -> dict:
     event_path = os.getenv("GITHUB_EVENT_PATH")
 
     if not event_path:
         print("GITHUB_EVENT_PATH가 없습니다. 로컬 테스트 모드로 실행합니다.")
         return {
             "action": "created",
-            "comment": {"body": "/bot run"},
-            "issue": {"number": 1, "title": "테스트 이슈", "body": "샘플 요구사항입니다."},
+            "comment": {
+                "body": "/bot run",
+                "user": {"login": "local-user"},
+            },
+            "issue": {
+                "number": 1,
+                "title": "테스트 이슈",
+                "body": "샘플 요구사항입니다.",
+            },
             "repository": {"full_name": "example/issue-to-pr-bot"},
         }
 
-    payload_text = Path(event_path).read_text(encoding="utf-8")
+    payload_text = Path(event_path).read_text(encoding="utf-8-sig")
     return json.loads(payload_text)
 
 
-def should_run_bot(payload):
-    comment_body = payload.get("comment", {}).get("body", "")
-    return "/bot run" in comment_body
-
-
-def main():
+def main() -> None:
     payload = load_event_payload()
+    request = build_issue_request(payload)
 
-    if not should_run_bot(payload):
+    if not should_run_bot(request.comment_body):
         print("봇 실행 명령이 없어서 종료합니다.")
         return
 
-    issue = payload.get("issue", {})
-    repo = payload.get("repository", {})
+    branch_name = build_branch_name(request)
+    task_prompt = build_task_prompt(request)
 
     print("봇 실행 시작")
-    print(f"저장소: {repo.get('full_name')}")
-    print(f"이슈 번호: {issue.get('number')}")
-    print(f"이슈 제목: {issue.get('title')}")
-    print(f"이슈 본문: {issue.get('body')}")
+    print(f"저장소: {request.repository}")
+    print(f"이슈 번호: {request.issue_number}")
+    print(f"이슈 제목: {request.issue_title}")
+    print(f"이슈 본문: {request.issue_body}")
+    print(f"댓글 작성자: {request.comment_author}")
+    print(f"작업 브랜치: {branch_name}")
+    print("작업 프롬프트:")
+    print(task_prompt)
 
 
 if __name__ == "__main__":

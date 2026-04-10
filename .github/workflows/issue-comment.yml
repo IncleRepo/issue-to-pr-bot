@@ -30,6 +30,17 @@ jobs:
       - name: Docker 이미지 빌드
         run: docker build -t issue-to-pr-bot:ci .
 
+      - name: 테스트 실행
+        shell: powershell
+        run: |
+          docker run --rm `
+            --read-only `
+            --cap-drop ALL `
+            --security-opt no-new-privileges `
+            -v "${env:GITHUB_WORKSPACE}:/workspace:ro" `
+            issue-to-pr-bot:ci `
+            python -m unittest discover -s tests
+
       - name: 봇 실행
         shell: powershell
         run: |

@@ -14,4 +14,4 @@ RUN useradd --create-home --shell /usr/sbin/nologin bot
 
 USER bot
 
-CMD ["python", "app/main.py"]
+CMD ["python", "-m", "app.main"]
