@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import traceback
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from app.bot import IssueRequest, build_branch_name, build_issue_request, build_
 from app.codex_runner import create_codex_pr
 from app.config import BotConfig, load_config
 from app.github_pr import PullRequestResult, create_issue_comment, create_test_pr
+from app.repo_context import collect_context_documents, format_context_documents
 from app.verification import VerificationError
 
 
@@ -35,6 +37,7 @@ def load_event_payload() -> dict:
 
 
 def main() -> None:
+    configure_output_encoding()
     workspace = Path.cwd()
     config = load_config(workspace)
     payload = load_event_payload()
@@ -54,7 +57,9 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         return
 
     branch_name = build_branch_name(request, config)
-    task_prompt = build_task_prompt(request, config)
+    documents = collect_context_documents(workspace, config)
+    repository_context = format_context_documents(documents)
+    task_prompt = build_task_prompt(request, config, repository_context)
 
     print("봇 실행 시작")
     print(f"저장소: {request.repository}")
@@ -65,6 +70,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     print(f"봇 모드: {config.mode}")
     print(f"검증 명령: {config.test_command}")
     print(f"작업 브랜치: {branch_name}")
+    print(f"저장소 규칙 문서: {len(documents)}개")
     print("작업 프롬프트:")
     print(task_prompt)
 
@@ -192,6 +198,11 @@ def safe_create_issue_comment(request: IssueRequest, body: str) -> None:
             print(f"이슈 댓글 작성 완료: {comment_url}")
     except Exception as comment_error:
         print(f"이슈 댓글 작성 실패: {comment_error}")
+
+def configure_output_encoding() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

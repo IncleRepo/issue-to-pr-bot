@@ -15,6 +15,11 @@ bot:
   output_dir: "agent-output"
   test_command: "python -m unittest"
   mode: "codex"
+  context_paths:
+    - "README.md"
+    - "docs"
+  protected_paths:
+    - ".github/workflows/**"
 """
         )
 
@@ -23,6 +28,8 @@ bot:
         self.assertEqual(values["output_dir"], "agent-output")
         self.assertEqual(values["test_command"], "python -m unittest")
         self.assertEqual(values["mode"], "codex")
+        self.assertEqual(values["context_paths"], ["README.md", "docs"])
+        self.assertEqual(values["protected_paths"], [".github/workflows/**"])
 
     def test_load_config_returns_defaults_without_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -46,6 +53,8 @@ bot:
         self.assertEqual(config.command, "/ai go")
         self.assertEqual(config.branch_prefix, "agent")
         self.assertEqual(config.output_dir, "bot-output")
+        self.assertIn("README.md", config.context_paths)
+        self.assertIn(".github/workflows/**", config.protected_paths)
 
 
 if __name__ == "__main__":

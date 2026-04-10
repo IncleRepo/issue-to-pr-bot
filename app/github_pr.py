@@ -5,6 +5,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
 from app.bot import IssueRequest, build_branch_name, build_task_prompt
@@ -82,6 +83,7 @@ def commit_push_and_open_pr(
         )
 
     changed_files = get_staged_files(workspace)
+    ensure_no_protected_changes(changed_files, config)
     run_git(["commit", "-m", commit_message], workspace)
     push_branch(repository, branch_name, token, workspace)
     pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token, config)
@@ -182,6 +184,25 @@ def get_staged_files(workspace: Path) -> list[str]:
         raise RuntimeError(f"Git staged file list failed: {result.stdout}")
 
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def ensure_no_protected_changes(changed_files: list[str], config: BotConfig) -> None:
+    blocked = [
+        path
+        for path in changed_files
+        if any(matches_protected_path(path, pattern) for pattern in config.protected_paths)
+    ]
+    if not blocked:
+        return
+
+    blocked_text = ", ".join(blocked)
+    raise RuntimeError(f"보호 경로가 변경되어 PR 생성을 중단합니다: {blocked_text}")
+
+
+def matches_protected_path(path: str, pattern: str) -> bool:
+    normalized_path = path.replace("\\", "/")
+    normalized_pattern = pattern.replace("\\", "/")
+    return fnmatch(normalized_path, normalized_pattern)
 
 
 def push_branch(repository: str, branch_name: str, token: str, workspace: Path) -> None:

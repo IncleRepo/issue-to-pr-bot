@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.bot import IssueRequest
 from app.config import BotConfig
-from app.github_pr import write_marker_file
+from app.github_pr import matches_protected_path, write_marker_file
 
 
 class GitHubPrTest(unittest.TestCase):
@@ -32,6 +32,11 @@ class GitHubPrTest(unittest.TestCase):
         self.assertIn("# Issue #3", content)
         self.assertIn("요구사항 본문", content)
         self.assertIn("bot/issue-3-comment-99-add-sample-output", content)
+
+    def test_matches_protected_path(self) -> None:
+        self.assertTrue(matches_protected_path(".github/workflows/ci.yml", ".github/workflows/**"))
+        self.assertTrue(matches_protected_path("secret.pem", "*.pem"))
+        self.assertFalse(matches_protected_path("README.md", ".github/workflows/**"))
 
 
 if __name__ == "__main__":

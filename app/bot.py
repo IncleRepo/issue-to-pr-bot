@@ -46,7 +46,11 @@ def build_branch_name(request: IssueRequest, config: BotConfig | None = None) ->
     return f"{config.branch_prefix}/issue-{request.issue_number}{suffix}-{slug[:40]}"
 
 
-def build_task_prompt(request: IssueRequest, config: BotConfig | None = None) -> str:
+def build_task_prompt(
+    request: IssueRequest,
+    config: BotConfig | None = None,
+    repository_context: str | None = None,
+) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
     return "\n".join(
@@ -66,10 +70,15 @@ def build_task_prompt(request: IssueRequest, config: BotConfig | None = None) ->
             "Trigger comment:",
             request.comment_body.strip(),
             "",
+            "Repository context:",
+            repository_context or "No repository guidance documents were provided.",
+            "",
             "Rules:",
             "- Create changes on a dedicated branch only.",
             "- Do not push directly to main.",
             "- Keep the change focused on the issue request.",
+            "- Follow the repository guidance documents when they apply.",
+            "- If the issue conflicts with repository guidance, prefer the repository guidance and explain the conflict.",
             f"- Run this verification command before opening a PR: {config.test_command}",
         ]
     )
