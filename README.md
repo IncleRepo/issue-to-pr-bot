@@ -31,6 +31,17 @@ Pull Request 생성
 - Codex CLI (ChatGPT Plus)
 - GitHub REST API
 
+## 💻 로컬 실행 방법
+
+Windows PowerShell 기준으로 아래 명령어를 실행합니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m app.main
+```
+
 ## 🎯 주요 기능 (MVP)
 
 - [ ] 이슈 댓글로 봇 실행 (`/bot run`)
