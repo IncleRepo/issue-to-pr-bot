@@ -27,6 +27,7 @@ Pull Request 생성
 - Python
 - GitHub Actions
 - Self-hosted Runner
+- Docker sandbox
 - Codex CLI (ChatGPT Plus)
 - GitHub REST API
 
@@ -44,6 +45,7 @@ Pull Request 생성
 - main 브랜치 직접 수정 금지
 - PR 생성 후 수동 리뷰 필수
 - 최소 권한 기반 실행
+- 봇 실행은 Docker 컨테이너 내부에서 격리
 
 ## 📌 향후 확장 계획
 
@@ -52,4 +54,3 @@ Pull Request 생성
 - 테스트 자동 실행 및 검증
 - 변경 코드(diff) 분석 기능
 - 조건부 자동 merge 기능
-
