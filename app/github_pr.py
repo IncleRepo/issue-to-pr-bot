@@ -16,6 +16,7 @@ class PullRequestResult:
     branch_name: str
     pull_request_url: str | None
     created: bool
+    changed_files: list[str]
 
 
 def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
@@ -73,13 +74,24 @@ def commit_push_and_open_pr(
 
     if not has_staged_changes(workspace):
         print("커밋할 변경사항이 없어 PR 생성을 건너뜁니다.")
-        return PullRequestResult(branch_name=branch_name, pull_request_url=None, created=False)
+        return PullRequestResult(
+            branch_name=branch_name,
+            pull_request_url=None,
+            created=False,
+            changed_files=[],
+        )
 
+    changed_files = get_staged_files(workspace)
     run_git(["commit", "-m", commit_message], workspace)
     push_branch(repository, branch_name, token, workspace)
     pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token, config)
 
-    return PullRequestResult(branch_name=branch_name, pull_request_url=pr_url, created=True)
+    return PullRequestResult(
+        branch_name=branch_name,
+        pull_request_url=pr_url,
+        created=True,
+        changed_files=changed_files,
+    )
 
 
 def write_marker_file(
@@ -147,6 +159,31 @@ def has_staged_changes(workspace: Path) -> bool:
     return result.returncode != 0
 
 
+def get_staged_files(workspace: Path) -> list[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "diff",
+            "--cached",
+            "--name-only",
+        ],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Git staged file list failed: {result.stdout}")
+
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def push_branch(repository: str, branch_name: str, token: str, workspace: Path) -> None:
     push_url = f"https://x-access-token:{token}@github.com/{repository}.git"
     try:
@@ -210,6 +247,26 @@ def find_existing_pull_request(
     if not response:
         return None
     return response[0]["html_url"]
+
+
+def create_issue_comment(
+    repository: str,
+    issue_number: int,
+    body: str,
+    token: str | None = None,
+) -> str | None:
+    token = token or os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        print("GitHub token is not available; skipping issue comment.")
+        return None
+
+    response = github_request(
+        "POST",
+        f"/repos/{repository}/issues/{issue_number}/comments",
+        token,
+        {"body": body},
+    )
+    return response["html_url"]
 
 
 def github_request(method: str, path: str, token: str, payload: dict | None = None):

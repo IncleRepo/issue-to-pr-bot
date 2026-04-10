@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: write
-  issues: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -40,6 +40,9 @@ jobs:
         with:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Docker 이미지 빌드
         run: docker build -t issue-to-pr-bot:ci .
