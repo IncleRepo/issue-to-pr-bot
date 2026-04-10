@@ -47,6 +47,24 @@ Pull Request 생성
 - 최소 권한 기반 실행
 - 봇 실행은 Docker 컨테이너 내부에서 격리
 
+## 🧪 로컬 실행 방법
+
+Windows PowerShell에서 아래 순서로 실행합니다.
+
+```powershell
+# 가상환경 생성
+python -m venv .venv
+
+# 의존성 설치
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 테스트 실행
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+
+# 봇 로컬 실행
+.\.venv\Scripts\python.exe -m app.main
+```
+
 ## 🛠️ 저장소별 설정
 
 `.issue-to-pr-bot.yml`에서 저장소별 실행 옵션을 조정합니다.
