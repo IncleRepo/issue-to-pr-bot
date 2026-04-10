@@ -20,33 +20,56 @@ class PullRequestResult:
 
 def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
     config = load_config(workspace)
+    branch_name = checkout_bot_branch(request, workspace, config)
+
+    write_marker_file(request, workspace, config)
+    return commit_push_and_open_pr(
+        request=request,
+        workspace=workspace,
+        config=config,
+        branch_name=branch_name,
+        commit_message=f"chore: issue #{request.issue_number} 작업 기록",
+        add_paths=[config.output_dir],
+    )
+
+
+def checkout_bot_branch(request: IssueRequest, workspace: Path, config: BotConfig) -> str:
+    branch_name = build_branch_name(request, config)
+    configure_git(workspace)
+    run_git(["checkout", "-B", branch_name], workspace)
+    return branch_name
+
+
+def commit_push_and_open_pr(
+    request: IssueRequest,
+    workspace: Path,
+    config: BotConfig,
+    branch_name: str,
+    commit_message: str,
+    add_paths: list[str] | None = None,
+) -> PullRequestResult:
     token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("BOT_GITHUB_TOKEN 또는 GITHUB_TOKEN이 없어 PR을 생성할 수 없습니다.")
 
     repository = os.getenv("GITHUB_REPOSITORY") or request.repository
     base_branch = os.getenv("GITHUB_REF_NAME") or "main"
-    branch_name = build_branch_name(request, config)
 
-    write_marker_file(request, workspace, config)
-    configure_git(workspace)
+    print("변경 파일 확인:")
+    run_git(["status", "--short"], workspace)
 
-    run_git(["checkout", "-B", branch_name], workspace)
-    run_git(["add", config.output_dir], workspace)
+    for path in add_paths or ["--all"]:
+        run_git(["add", path], workspace)
 
-    if has_staged_changes(workspace):
-        run_git(["commit", "-m", f"chore: issue #{request.issue_number} 작업 기록"], workspace)
-    else:
-        print("커밋할 변경사항이 없습니다.")
+    if not has_staged_changes(workspace):
+        print("커밋할 변경사항이 없어 PR 생성을 건너뜁니다.")
+        return PullRequestResult(branch_name=branch_name, pull_request_url=None, created=False)
 
+    run_git(["commit", "-m", commit_message], workspace)
     push_branch(repository, branch_name, token, workspace)
     pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token, config)
 
-    return PullRequestResult(
-        branch_name=branch_name,
-        pull_request_url=pr_url,
-        created=True,
-    )
+    return PullRequestResult(branch_name=branch_name, pull_request_url=pr_url, created=True)
 
 
 def write_marker_file(
@@ -144,8 +167,8 @@ def ensure_pull_request(
         [
             f"Closes #{request.issue_number}",
             "",
-            f"이 PR은 `{config.command}` 테스트 파이프라인으로 자동 생성되었습니다.",
-            "현재 단계에서는 Codex 실행 전 브랜치/커밋/PR 생성 흐름만 검증합니다.",
+            f"이 PR은 `{config.command}` 댓글로 자동 생성되었습니다.",
+            f"봇 모드: `{config.mode}`",
         ]
     )
     payload = {

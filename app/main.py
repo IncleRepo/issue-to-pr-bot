@@ -2,16 +2,17 @@ import json
 import os
 from pathlib import Path
 
-from app.bot import build_branch_name, build_issue_request, build_task_prompt, should_run_bot
+from app.bot import IssueRequest, build_branch_name, build_issue_request, build_task_prompt, should_run_bot
+from app.codex_runner import create_codex_pr
 from app.config import load_config
-from app.github_pr import create_test_pr
+from app.github_pr import PullRequestResult, create_test_pr
 
 
 def load_event_payload() -> dict:
     event_path = os.getenv("GITHUB_EVENT_PATH")
 
     if not event_path:
-        print("GITHUB_EVENT_PATH가 없습니다. 로컬 테스트 모드로 실행합니다.")
+        print("GITHUB_EVENT_PATH가 없어 로컬 테스트 모드로 실행합니다.")
         return {
             "action": "created",
             "comment": {
@@ -32,12 +33,13 @@ def load_event_payload() -> dict:
 
 
 def main() -> None:
-    config = load_config(Path.cwd())
+    workspace = Path.cwd()
+    config = load_config(workspace)
     payload = load_event_payload()
     request = build_issue_request(payload)
 
     if not should_run_bot(request.comment_body, config):
-        print("봇 실행 명령이 없어서 종료합니다.")
+        print("봇 실행 명령이 없어 종료합니다.")
         return
 
     branch_name = build_branch_name(request, config)
@@ -56,11 +58,24 @@ def main() -> None:
     print(task_prompt)
 
     if os.getenv("BOT_CREATE_PR") != "1":
-        print("BOT_CREATE_PR이 1이 아니므로 PR 생성은 건너뜁니다.")
+        print("BOT_CREATE_PR이 1이 아니므로 PR 생성을 건너뜁니다.")
         return
 
-    result = create_test_pr(request, Path.cwd())
-    print(f"PR 생성 완료: {result.pull_request_url}")
+    result = run_configured_mode(config.mode, request, workspace)
+    if result.created:
+        print(f"PR 생성 완료: {result.pull_request_url}")
+        return
+
+    print("PR 생성 건너뜀: 변경사항이 없습니다.")
+
+
+def run_configured_mode(mode: str, request: IssueRequest, workspace: Path) -> PullRequestResult:
+    normalized_mode = mode.strip().lower()
+    if normalized_mode == "test-pr":
+        return create_test_pr(request, workspace)
+    if normalized_mode == "codex":
+        return create_codex_pr(request, workspace)
+    raise RuntimeError(f"지원하지 않는 봇 모드입니다: {mode}")
 
 
 if __name__ == "__main__":
