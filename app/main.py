@@ -4,8 +4,15 @@ import sys
 import traceback
 from pathlib import Path
 
-from app.bot import IssueRequest, build_branch_name, build_issue_request, build_task_prompt, should_run_bot
-from app.codex_runner import create_codex_pr
+from app.bot import (
+    BotCommand,
+    IssueRequest,
+    build_branch_name,
+    build_issue_request,
+    build_task_prompt,
+    parse_bot_command,
+)
+from app.codex_runner import create_codex_pr, run_codex_plan
 from app.config import BotConfig, load_config
 from app.github_pr import PullRequestResult, create_issue_comment, create_test_pr
 from app.repo_context import collect_context_documents, format_context_documents
@@ -52,7 +59,8 @@ def main() -> None:
 
 
 def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
-    if not should_run_bot(request.comment_body, config):
+    command = parse_bot_command(request.comment_body, config)
+    if not command:
         print("봇 실행 명령이 없어 종료합니다.")
         return
 
@@ -68,6 +76,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     print(f"이슈 본문: {request.issue_body}")
     print(f"댓글 작성자: {request.comment_author}")
     print(f"봇 모드: {config.mode}")
+    print(f"봇 명령: {command.action}")
     print(f"검증 명령: {config.test_command}")
     print(f"작업 브랜치: {branch_name}")
     print(f"저장소 규칙 문서: {len(documents)}개")
@@ -76,6 +85,11 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
 
     if os.getenv("BOT_CREATE_PR") != "1":
         print("BOT_CREATE_PR이 1이 아니므로 PR 생성을 건너뜁니다.")
+        return
+
+    if command.action == "plan":
+        result = run_codex_plan(request, workspace, config)
+        post_plan_comment(request, config, command, result.output)
         return
 
     result = run_configured_mode(config.mode, request, workspace)
@@ -95,6 +109,30 @@ def run_configured_mode(mode: str, request: IssueRequest, workspace: Path) -> Pu
     if normalized_mode == "codex":
         return create_codex_pr(request, workspace)
     raise RuntimeError(f"지원하지 않는 봇 모드입니다: {mode}")
+
+
+def post_plan_comment(
+    request: IssueRequest,
+    config: BotConfig,
+    command: BotCommand,
+    plan_output: str,
+) -> None:
+    body = "\n".join(
+        [
+            "봇이 작업 계획을 작성했습니다.",
+            "",
+            f"- 모드: `{config.mode}`",
+            f"- 명령: `{command.action}`",
+            f"- 트리거: `{command.trigger}`",
+            "",
+            "계획:",
+            "",
+            trim_codex_output(plan_output),
+            "",
+            format_run_url(),
+        ]
+    ).strip()
+    safe_create_issue_comment(request, body)
 
 
 def post_success_comment(request: IssueRequest, config: BotConfig, result: PullRequestResult) -> None:
@@ -182,6 +220,13 @@ def format_run_url() -> str:
     return f"Actions 로그: {server_url}/{repository}/actions/runs/{run_id}"
 
 
+def trim_codex_output(output: str) -> str:
+    text = output.strip()
+    if not text:
+        return "(계획 출력 없음)"
+    return truncate_text(text, 4000)
+
+
 def truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -198,6 +243,7 @@ def safe_create_issue_comment(request: IssueRequest, body: str) -> None:
             print(f"이슈 댓글 작성 완료: {comment_url}")
     except Exception as comment_error:
         print(f"이슈 댓글 작성 실패: {comment_error}")
+
 
 def configure_output_encoding() -> None:
     for stream in (sys.stdout, sys.stderr):

@@ -16,17 +16,77 @@ class IssueRequest:
     comment_id: int
 
 
+@dataclass(frozen=True)
+class BotCommand:
+    action: str
+    trigger: str
+    instruction: str
+    options: dict[str, str]
+
+
 def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
     config = config or BotConfig()
-    return config.command in comment_body or should_run_for_mention(comment_body, config)
+    return parse_bot_command(comment_body, config) is not None
+
+
+def parse_bot_command(comment_body: str, config: BotConfig | None = None) -> BotCommand | None:
+    config = config or BotConfig()
+
+    command_match = find_literal_command(comment_body, config.plan_command)
+    if command_match:
+        instruction = comment_body[command_match.end() :].strip()
+        return BotCommand("plan", config.plan_command, instruction, parse_options(instruction))
+
+    command_match = find_literal_command(comment_body, config.command)
+    if command_match:
+        instruction = comment_body[command_match.end() :].strip()
+        return BotCommand("run", config.command, instruction, parse_options(instruction))
+
+    mention_match = find_mention(comment_body, config)
+    if not mention_match:
+        return None
+
+    instruction = comment_body[mention_match.end() :].strip()
+    action = "run"
+    if instruction.lower().startswith("plan"):
+        action = "plan"
+        instruction = instruction[4:].strip(" \t:,-")
+    elif instruction.lower().startswith("run"):
+        instruction = instruction[3:].strip(" \t:,-")
+
+    return BotCommand(action, config.mention, instruction, parse_options(instruction))
 
 
 def should_run_for_mention(comment_body: str, config: BotConfig | None = None) -> bool:
     config = config or BotConfig()
+    return find_mention(comment_body, config) is not None
+
+
+def find_literal_command(comment_body: str, command: str) -> re.Match[str] | None:
+    command = command.strip()
+    if not command:
+        return None
+    return re.search(rf"(^|\s){re.escape(command)}(\s|$)", comment_body, re.IGNORECASE)
+
+
+def find_mention(comment_body: str, config: BotConfig) -> re.Match[str] | None:
     mention = config.mention.strip()
     if not mention:
-        return False
-    return re.search(rf"(^|\s){re.escape(mention)}(\s|$|[,.!?])", comment_body, re.IGNORECASE) is not None
+        return None
+    return re.search(rf"(^|\s){re.escape(mention)}(\s|$|[,.!?])", comment_body, re.IGNORECASE)
+
+
+def parse_options(instruction: str) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for token in instruction.split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip().strip(",")
+        if key and value:
+            options[key] = value
+    return options
 
 
 def build_issue_request(payload: dict) -> IssueRequest:
@@ -88,5 +148,42 @@ def build_task_prompt(
             "- Follow the repository guidance documents when they apply.",
             "- If the issue conflicts with repository guidance, prefer the repository guidance and explain the conflict.",
             f"- Run this verification command before opening a PR: {config.test_command}",
+        ]
+    )
+
+
+def build_plan_prompt(
+    request: IssueRequest,
+    config: BotConfig | None = None,
+    repository_context: str | None = None,
+) -> str:
+    config = config or BotConfig()
+    created_at = datetime.now(UTC).isoformat(timespec="seconds")
+    return "\n".join(
+        [
+            f"You are reviewing the {request.repository} repository.",
+            "Create an implementation plan for this GitHub issue.",
+            "Do not edit files, do not create commits, and do not open a pull request.",
+            "",
+            f"Repository: {request.repository}",
+            f"Issue: #{request.issue_number}",
+            f"Title: {request.issue_title}",
+            f"Author: {request.comment_author}",
+            f"Created at: {created_at}",
+            "",
+            "Issue body:",
+            request.issue_body.strip() or "(empty)",
+            "",
+            "Trigger comment:",
+            request.comment_body.strip(),
+            "",
+            "Repository context:",
+            repository_context or "No repository guidance documents were provided.",
+            "",
+            "Return a concise Korean plan with:",
+            "- likely files to inspect or change",
+            "- implementation steps",
+            "- verification commands",
+            "- blockers or missing context, if any",
         ]
     )

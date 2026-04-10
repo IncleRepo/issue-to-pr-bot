@@ -11,6 +11,7 @@ class ConfigTest(unittest.TestCase):
             """
 bot:
   command: "/ai go"
+  plan_command: "/ai plan"
   mention: "@agent-bot"
   branch_prefix: "agent"
   output_dir: "agent-output"
@@ -25,6 +26,7 @@ bot:
         )
 
         self.assertEqual(values["command"], "/ai go")
+        self.assertEqual(values["plan_command"], "/ai plan")
         self.assertEqual(values["mention"], "@agent-bot")
         self.assertEqual(values["branch_prefix"], "agent")
         self.assertEqual(values["output_dir"], "agent-output")

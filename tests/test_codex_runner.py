@@ -16,6 +16,13 @@ class CodexRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--cd") + 1], str(workspace))
         self.assertEqual(command[-1], "-")
 
+    def test_build_codex_command_can_write_last_message(self) -> None:
+        output_path = Path("/tmp/last-message.txt")
+        command = build_codex_command(Path("/workspace"), output_last_message=output_path)
+
+        self.assertEqual(command[command.index("--output-last-message") + 1], str(output_path))
+        self.assertEqual(command[-1], "-")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ DEFAULT_PROTECTED_PATHS = [
 @dataclass(frozen=True)
 class BotConfig:
     command: str = "/bot run"
+    plan_command: str = "/bot plan"
     mention: str = "@incle-issue-to-pr-bot"
     branch_prefix: str = "bot"
     output_dir: str = "bot-output"
@@ -53,6 +54,7 @@ def load_config(workspace: Path) -> BotConfig:
     values = parse_simple_bot_config(config_path.read_text(encoding="utf-8-sig"))
     return BotConfig(
         command=values.get("command", defaults.command),
+        plan_command=values.get("plan_command", defaults.plan_command),
         mention=values.get("mention", defaults.mention),
         branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
         output_dir=values.get("output_dir", defaults.output_dir),
