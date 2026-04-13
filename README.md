@@ -55,6 +55,8 @@ Pull Request 생성
 bot:
   command: "/bot run"
   plan_command: "/bot plan"
+  help_command: "/bot help"
+  status_command: "/bot status"
   mention: "@incle-issue-to-pr-bot"
   branch_prefix: "bot"
   output_dir: "bot-output"
@@ -75,6 +77,16 @@ bot:
 ```
 
 `external:` 접두사는 runner가 마운트한 외부 context 디렉터리 기준 경로를 뜻합니다.
+
+기본 명령:
+
+- `/bot run`
+- `/bot plan`
+- `/bot help`
+- `/bot status`
+- `@incle-issue-to-pr-bot run ...`
+- `@incle-issue-to-pr-bot plan ...`
+- `@incle-issue-to-pr-bot status`
 
 ## 🧾 PR 템플릿
 

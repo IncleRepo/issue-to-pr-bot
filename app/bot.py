@@ -32,6 +32,16 @@ def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
 def parse_bot_command(comment_body: str, config: BotConfig | None = None) -> BotCommand | None:
     config = config or BotConfig()
 
+    command_match = find_literal_command(comment_body, config.help_command)
+    if command_match:
+        instruction = comment_body[command_match.end() :].strip()
+        return BotCommand("help", config.help_command, instruction, parse_options(instruction))
+
+    command_match = find_literal_command(comment_body, config.status_command)
+    if command_match:
+        instruction = comment_body[command_match.end() :].strip()
+        return BotCommand("status", config.status_command, instruction, parse_options(instruction))
+
     command_match = find_literal_command(comment_body, config.plan_command)
     if command_match:
         instruction = comment_body[command_match.end() :].strip()
@@ -48,10 +58,17 @@ def parse_bot_command(comment_body: str, config: BotConfig | None = None) -> Bot
 
     instruction = comment_body[mention_match.end() :].strip()
     action = "run"
-    if instruction.lower().startswith("plan"):
+    lowered = instruction.lower()
+    if lowered.startswith("help"):
+        action = "help"
+        instruction = instruction[4:].strip(" \t:,-")
+    elif lowered.startswith("status"):
+        action = "status"
+        instruction = instruction[6:].strip(" \t:,-")
+    elif lowered.startswith("plan"):
         action = "plan"
         instruction = instruction[4:].strip(" \t:,-")
-    elif instruction.lower().startswith("run"):
+    elif lowered.startswith("run"):
         instruction = instruction[3:].strip(" \t:,-")
 
     return BotCommand(action, config.mention, instruction, parse_options(instruction))

@@ -12,40 +12,60 @@ from app.config import BotConfig
 
 
 class BotTest(unittest.TestCase):
-    def test_should_run_bot_requires_command(self) -> None:
+    def test_should_run_bot_requires_known_command(self) -> None:
         self.assertTrue(should_run_bot("/bot run"))
         self.assertTrue(should_run_bot("please /bot run this"))
-        self.assertFalse(should_run_bot("/bot help"))
+        self.assertTrue(should_run_bot("/bot help"))
+        self.assertTrue(should_run_bot("/bot status"))
+        self.assertFalse(should_run_bot("/bot unknown"))
         self.assertTrue(should_run_bot("/ai go", BotConfig(command="/ai go")))
 
     def test_should_run_bot_accepts_configured_mention(self) -> None:
         config = BotConfig(mention="@incle-issue-to-pr-bot")
 
-        self.assertTrue(should_run_bot("@incle-issue-to-pr-bot README를 고쳐줘", config))
+        self.assertTrue(should_run_bot("@incle-issue-to-pr-bot README 업데이트", config))
         self.assertTrue(should_run_for_mention("please @incle-issue-to-pr-bot, run this", config))
         self.assertFalse(should_run_for_mention("@someone-else run", config))
 
-    def test_parse_bot_command_supports_run_and_plan(self) -> None:
+    def test_parse_bot_command_supports_run_plan_help_and_status(self) -> None:
         run_command = parse_bot_command("/bot run effort=high", BotConfig())
         plan_command = parse_bot_command("/bot plan README 수정 계획", BotConfig())
+        help_command = parse_bot_command("/bot help", BotConfig())
+        status_command = parse_bot_command("/bot status", BotConfig())
 
         self.assertIsNotNone(run_command)
         self.assertIsNotNone(plan_command)
+        self.assertIsNotNone(help_command)
+        self.assertIsNotNone(status_command)
         assert run_command is not None
         assert plan_command is not None
+        assert help_command is not None
+        assert status_command is not None
+
         self.assertEqual(run_command.action, "run")
         self.assertEqual(run_command.options["effort"], "high")
         self.assertEqual(plan_command.action, "plan")
         self.assertEqual(plan_command.instruction, "README 수정 계획")
+        self.assertEqual(help_command.action, "help")
+        self.assertEqual(status_command.action, "status")
 
-    def test_parse_bot_command_supports_mention_plan(self) -> None:
-        command = parse_bot_command("@incle-issue-to-pr-bot plan README 수정", BotConfig())
+    def test_parse_bot_command_supports_mention_actions(self) -> None:
+        plan_command = parse_bot_command("@incle-issue-to-pr-bot plan README 수정", BotConfig())
+        help_command = parse_bot_command("@incle-issue-to-pr-bot help", BotConfig())
+        status_command = parse_bot_command("@incle-issue-to-pr-bot status", BotConfig())
 
-        self.assertIsNotNone(command)
-        assert command is not None
-        self.assertEqual(command.action, "plan")
-        self.assertEqual(command.trigger, "@incle-issue-to-pr-bot")
-        self.assertEqual(command.instruction, "README 수정")
+        self.assertIsNotNone(plan_command)
+        self.assertIsNotNone(help_command)
+        self.assertIsNotNone(status_command)
+        assert plan_command is not None
+        assert help_command is not None
+        assert status_command is not None
+
+        self.assertEqual(plan_command.action, "plan")
+        self.assertEqual(plan_command.trigger, "@incle-issue-to-pr-bot")
+        self.assertEqual(plan_command.instruction, "README 수정")
+        self.assertEqual(help_command.action, "help")
+        self.assertEqual(status_command.action, "status")
 
     def test_build_issue_request_handles_missing_values(self) -> None:
         request = build_issue_request({})
@@ -108,7 +128,6 @@ class BotTest(unittest.TestCase):
         )
 
         config = BotConfig(branch_prefix="agent")
-
         self.assertEqual(build_branch_name(request, config), "agent/issue-12-comment-34-add-github-pr-flow")
 
 

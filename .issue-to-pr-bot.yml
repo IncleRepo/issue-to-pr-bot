@@ -1,6 +1,8 @@
 bot:
   command: "/bot run"
   plan_command: "/bot plan"
+  help_command: "/bot help"
+  status_command: "/bot status"
   mention: "@incle-issue-to-pr-bot"
   branch_prefix: "bot"
   output_dir: "bot-output"

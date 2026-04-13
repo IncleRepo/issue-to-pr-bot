@@ -36,6 +36,8 @@ DEFAULT_PROTECTED_PATHS = [
 class BotConfig:
     command: str = "/bot run"
     plan_command: str = "/bot plan"
+    help_command: str = "/bot help"
+    status_command: str = "/bot status"
     mention: str = "@incle-issue-to-pr-bot"
     branch_prefix: str = "bot"
     output_dir: str = "bot-output"
@@ -60,6 +62,8 @@ def load_config(workspace: Path) -> BotConfig:
     return BotConfig(
         command=values.get("command", defaults.command),
         plan_command=values.get("plan_command", defaults.plan_command),
+        help_command=values.get("help_command", defaults.help_command),
+        status_command=values.get("status_command", defaults.status_command),
         mention=values.get("mention", defaults.mention),
         branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
         output_dir=values.get("output_dir", defaults.output_dir),
