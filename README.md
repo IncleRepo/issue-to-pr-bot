@@ -59,6 +59,10 @@ bot:
   status_command: "/bot status"
   mention: "@incle-issue-to-pr-bot"
   branch_prefix: "bot"
+  branch_name_template: "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
+  pr_title_template: "[bot] Issue #{issue_number}: {issue_title}"
+  codex_commit_message_template: "feat: issue #{issue_number} Codex 작업 반영"
+  test_commit_message_template: "chore: issue #{issue_number} 작업 기록"
   output_dir: "bot-output"
   test_command: "python -m unittest discover -s tests"
   check_commands:
@@ -87,6 +91,17 @@ bot:
 - `@incle-issue-to-pr-bot run ...`
 - `@incle-issue-to-pr-bot plan ...`
 - `@incle-issue-to-pr-bot status`
+
+네이밍 템플릿에서 사용할 수 있는 주요 placeholder:
+
+- `{issue_number}`
+- `{issue_title}`
+- `{slug}`
+- `{comment_id}`
+- `{comment_suffix}`
+- `{branch_prefix}`
+- `{repository}`
+- `{comment_author}`
 
 ## 🧾 PR 템플릿
 

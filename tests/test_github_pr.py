@@ -119,6 +119,30 @@ class GitHubPrTest(unittest.TestCase):
         self.assertIn("Closes #8", body)
         self.assertIn("- `README.md`", body)
 
+    def test_build_pull_request_title_template_is_used(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=9,
+            issue_title="Custom title",
+            issue_body="",
+            comment_body="/bot run",
+            comment_author="IncleRepo",
+            comment_id=12,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath(".github").mkdir()
+            workspace.joinpath(".github", "pull_request_template.md").write_text(
+                "Closes #{{ISSUE_NUMBER}}",
+                encoding="utf-8",
+            )
+
+            config = BotConfig(pr_title_template="BOT-{issue_number}: {issue_title}")
+            body = build_pull_request_body(request, config, workspace, ["README.md"])
+
+        self.assertEqual(body, "Closes #9")
+
 
 if __name__ == "__main__":
     unittest.main()

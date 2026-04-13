@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.attachments import collect_attachment_context, format_attachment_context
-from app.bot import BotCommand, IssueRequest, build_plan_prompt, build_task_prompt
+from app.bot import (
+    BotCommand,
+    IssueRequest,
+    build_codex_commit_message,
+    build_plan_prompt,
+    build_task_prompt,
+)
 from app.config import BotConfig, load_config
 from app.github_pr import PullRequestResult, checkout_bot_branch, commit_push_and_open_pr
 from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
@@ -36,7 +42,7 @@ def create_codex_pr(
         workspace=workspace,
         config=config,
         branch_name=branch_name,
-        commit_message=f"feat: issue #{request.issue_number} Codex 작업 반영",
+        commit_message=build_codex_commit_message(request, config),
     )
 
 

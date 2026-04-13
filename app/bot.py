@@ -124,11 +124,69 @@ def build_issue_request(payload: dict) -> IssueRequest:
 
 def build_branch_name(request: IssueRequest, config: BotConfig | None = None) -> str:
     config = config or BotConfig()
-    slug = re.sub(r"[^a-z0-9]+", "-", request.issue_title.lower()).strip("-")
+    rendered = render_request_template(config.branch_name_template, request, config)
+    normalized = normalize_branch_name(rendered)
+    return normalized or f"{config.branch_prefix}/issue-{request.issue_number}"
+
+
+def build_pull_request_title(request: IssueRequest, config: BotConfig | None = None) -> str:
+    config = config or BotConfig()
+    return render_request_template(config.pr_title_template, request, config)
+
+
+def build_codex_commit_message(request: IssueRequest, config: BotConfig | None = None) -> str:
+    config = config or BotConfig()
+    return render_request_template(config.codex_commit_message_template, request, config)
+
+
+def build_test_commit_message(request: IssueRequest, config: BotConfig | None = None) -> str:
+    config = config or BotConfig()
+    return render_request_template(config.test_commit_message_template, request, config)
+
+
+def render_request_template(
+    template: str,
+    request: IssueRequest,
+    config: BotConfig | None = None,
+) -> str:
+    config = config or BotConfig()
+    context = build_request_template_context(request, config)
+    return template.format_map(DefaultTemplateMap(context))
+
+
+def build_request_template_context(request: IssueRequest, config: BotConfig) -> dict[str, object]:
+    slug = build_issue_slug(request.issue_title)
+    comment_suffix = f"-comment-{request.comment_id}" if request.comment_id else ""
+    return {
+        "branch_prefix": config.branch_prefix,
+        "comment_author": request.comment_author,
+        "comment_id": request.comment_id,
+        "comment_suffix": comment_suffix,
+        "issue_body": request.issue_body,
+        "issue_number": request.issue_number,
+        "issue_title": request.issue_title,
+        "repository": request.repository,
+        "slug": slug,
+    }
+
+
+def build_issue_slug(issue_title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", issue_title.lower()).strip("-")
     if not slug:
-        slug = "issue"
-    suffix = f"-comment-{request.comment_id}" if request.comment_id else ""
-    return f"{config.branch_prefix}/issue-{request.issue_number}{suffix}-{slug[:40]}"
+        return "issue"
+    return slug[:40]
+
+
+def normalize_branch_name(branch_name: str) -> str:
+    branch_name = re.sub(r"[^A-Za-z0-9._/-]+", "-", branch_name.strip())
+    branch_name = re.sub(r"/{2,}", "/", branch_name)
+    branch_name = re.sub(r"-{2,}", "-", branch_name)
+    return branch_name.strip("/.-")
+
+
+class DefaultTemplateMap(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 def build_task_prompt(

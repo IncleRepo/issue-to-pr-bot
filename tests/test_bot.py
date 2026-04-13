@@ -3,7 +3,10 @@ import unittest
 from app.bot import (
     IssueRequest,
     build_branch_name,
+    build_codex_commit_message,
     build_issue_request,
+    build_pull_request_title,
+    build_test_commit_message,
     parse_bot_command,
     should_run_bot,
     should_run_for_mention,
@@ -129,6 +132,32 @@ class BotTest(unittest.TestCase):
 
         config = BotConfig(branch_prefix="agent")
         self.assertEqual(build_branch_name(request, config), "agent/issue-12-comment-34-add-github-pr-flow")
+
+    def test_templates_can_customize_branch_commit_and_pr_title(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=15,
+            issue_title="Add GitHub PR flow!",
+            issue_body="",
+            comment_body="/bot run",
+            comment_author="IncleRepo",
+            comment_id=21,
+        )
+        config = BotConfig(
+            branch_prefix="agent",
+            branch_name_template="work/{issue_number}-{slug}",
+            pr_title_template="bot/#{issue_number} {issue_title}",
+            codex_commit_message_template="feat(issue-{issue_number}): {issue_title}",
+            test_commit_message_template="chore(issue-{issue_number}): marker",
+        )
+
+        self.assertEqual(build_branch_name(request, config), "work/15-add-github-pr-flow")
+        self.assertEqual(build_pull_request_title(request, config), "bot/#15 Add GitHub PR flow!")
+        self.assertEqual(
+            build_codex_commit_message(request, config),
+            "feat(issue-15): Add GitHub PR flow!",
+        )
+        self.assertEqual(build_test_commit_message(request, config), "chore(issue-15): marker")
 
 
 if __name__ == "__main__":

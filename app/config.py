@@ -40,6 +40,10 @@ class BotConfig:
     status_command: str = "/bot status"
     mention: str = "@incle-issue-to-pr-bot"
     branch_prefix: str = "bot"
+    branch_name_template: str = "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
+    pr_title_template: str = "[bot] Issue #{issue_number}: {issue_title}"
+    codex_commit_message_template: str = "feat: issue #{issue_number} Codex 작업 반영"
+    test_commit_message_template: str = "chore: issue #{issue_number} 작업 기록"
     output_dir: str = "bot-output"
     test_command: str = "python -m unittest discover -s tests"
     check_commands: list[str] = field(default_factory=list)
@@ -66,6 +70,16 @@ def load_config(workspace: Path) -> BotConfig:
         status_command=values.get("status_command", defaults.status_command),
         mention=values.get("mention", defaults.mention),
         branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
+        branch_name_template=values.get("branch_name_template", defaults.branch_name_template),
+        pr_title_template=values.get("pr_title_template", defaults.pr_title_template),
+        codex_commit_message_template=values.get(
+            "codex_commit_message_template",
+            defaults.codex_commit_message_template,
+        ),
+        test_commit_message_template=values.get(
+            "test_commit_message_template",
+            defaults.test_commit_message_template,
+        ),
         output_dir=values.get("output_dir", defaults.output_dir),
         test_command=values.get("test_command", defaults.test_command),
         check_commands=as_string_list(values.get("check_commands"), defaults.check_commands),
@@ -113,7 +127,7 @@ def parse_simple_bot_config(config_text: str) -> dict[str, str | list[str]]:
     current_list_key: str | None = None
 
     for raw_line in config_text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
+        line = strip_config_comment(raw_line).rstrip()
         if not line.strip():
             continue
 
@@ -154,3 +168,25 @@ def unquote_config_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def strip_config_comment(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "#":
+            return line[:index]
+    return line

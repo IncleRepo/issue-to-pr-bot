@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.parse
@@ -8,7 +9,13 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
-from app.bot import IssueRequest, build_branch_name, build_task_prompt
+from app.bot import (
+    IssueRequest,
+    build_branch_name,
+    build_pull_request_title,
+    build_task_prompt,
+    build_test_commit_message,
+)
 from app.config import BotConfig, get_check_commands, load_config
 
 
@@ -30,7 +37,7 @@ def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
         workspace=workspace,
         config=config,
         branch_name=branch_name,
-        commit_message=f"chore: issue #{request.issue_number} 작업 기록",
+        commit_message=build_test_commit_message(request, config),
         add_paths=[config.output_dir],
     )
 
@@ -244,7 +251,7 @@ def ensure_pull_request(
     owner = repository.split("/", 1)[0]
     body = build_pull_request_body(request, config, workspace, changed_files)
     payload = {
-        "title": f"[bot] Issue #{request.issue_number}: {request.issue_title}",
+        "title": build_pull_request_title(request, config),
         "head": f"{owner}:{branch_name}",
         "base": base_branch,
         "body": body,
@@ -296,7 +303,7 @@ def build_pull_request_body(
     for placeholder, value in replacements.items():
         rendered = rendered.replace(placeholder, value)
 
-    rendered = rendered.replace("Closes #", f"Closes #{request.issue_number}")
+    rendered = re.sub(r"Closes #(?=\s|$)", f"Closes #{request.issue_number}", rendered)
     return rendered.strip()
 
 
