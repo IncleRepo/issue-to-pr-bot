@@ -65,6 +65,19 @@ bot:
   mode: "codex"
 ```
 
+## 🧾 PR 템플릿
+
+봇은 `.github/pull_request_template.md`를 읽어서 PR 본문을 생성합니다.
+
+사용 가능한 placeholder:
+
+- `{{ISSUE_NUMBER}}`
+- `{{ISSUE_TITLE}}`
+- `{{CHANGED_FILES}}`
+- `{{VERIFICATION_COMMANDS}}`
+- `{{TRIGGER_COMMAND}}`
+- `{{BOT_MODE}}`
+
 ## 📌 향후 확장 계획
 
 - PR 리뷰 코멘트 자동 반영

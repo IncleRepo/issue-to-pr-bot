@@ -9,7 +9,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from app.bot import IssueRequest, build_branch_name, build_task_prompt
-from app.config import BotConfig, load_config
+from app.config import BotConfig, get_check_commands, load_config
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,16 @@ def commit_push_and_open_pr(
     ensure_no_protected_changes(changed_files, config)
     run_git(["commit", "-m", commit_message], workspace)
     push_branch(repository, branch_name, token, workspace)
-    pr_url = ensure_pull_request(repository, branch_name, base_branch, request, token, config)
+    pr_url = ensure_pull_request(
+        repository,
+        branch_name,
+        base_branch,
+        request,
+        token,
+        config,
+        workspace,
+        changed_files,
+    )
 
     return PullRequestResult(
         branch_name=branch_name,
@@ -224,6 +233,8 @@ def ensure_pull_request(
     request: IssueRequest,
     token: str,
     config: BotConfig,
+    workspace: Path,
+    changed_files: list[str],
 ) -> str:
     existing_url = find_existing_pull_request(repository, branch_name, base_branch, token)
     if existing_url:
@@ -231,14 +242,7 @@ def ensure_pull_request(
         return existing_url
 
     owner = repository.split("/", 1)[0]
-    body = "\n".join(
-        [
-            f"Closes #{request.issue_number}",
-            "",
-            f"이 PR은 `{config.command}` 댓글로 자동 생성되었습니다.",
-            f"봇 모드: `{config.mode}`",
-        ]
-    )
+    body = build_pull_request_body(request, config, workspace, changed_files)
     payload = {
         "title": f"[bot] Issue #{request.issue_number}: {request.issue_title}",
         "head": f"{owner}:{branch_name}",
@@ -268,6 +272,97 @@ def find_existing_pull_request(
     if not response:
         return None
     return response[0]["html_url"]
+
+
+def build_pull_request_body(
+    request: IssueRequest,
+    config: BotConfig,
+    workspace: Path,
+    changed_files: list[str],
+) -> str:
+    template = load_pull_request_template(workspace)
+    if not template:
+        return build_default_pull_request_body(request, config, changed_files)
+
+    rendered = template
+    replacements = {
+        "{{ISSUE_NUMBER}}": str(request.issue_number),
+        "{{ISSUE_TITLE}}": request.issue_title,
+        "{{TRIGGER_COMMAND}}": config.command,
+        "{{BOT_MODE}}": config.mode,
+        "{{CHANGED_FILES}}": format_pull_request_changed_files(changed_files),
+        "{{VERIFICATION_COMMANDS}}": format_pull_request_verification_commands(config),
+    }
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+
+    rendered = rendered.replace("Closes #", f"Closes #{request.issue_number}")
+    return rendered.strip()
+
+
+def load_pull_request_template(workspace: Path) -> str | None:
+    for template_path in iter_pull_request_template_paths(workspace):
+        if not template_path.exists() or not template_path.is_file():
+            continue
+        content = template_path.read_text(encoding="utf-8")
+        if content.strip():
+            return content
+    return None
+
+
+def iter_pull_request_template_paths(workspace: Path) -> list[Path]:
+    candidates = [
+        workspace / ".github" / "pull_request_template.md",
+        workspace / ".github" / "PULL_REQUEST_TEMPLATE.md",
+        workspace / "pull_request_template.md",
+        workspace / "PULL_REQUEST_TEMPLATE.md",
+    ]
+
+    template_dir = workspace / ".github" / "PULL_REQUEST_TEMPLATE"
+    if template_dir.exists() and template_dir.is_dir():
+        candidates.extend(sorted(path for path in template_dir.glob("*.md") if path.is_file()))
+
+    return candidates
+
+
+def build_default_pull_request_body(
+    request: IssueRequest,
+    config: BotConfig,
+    changed_files: list[str],
+) -> str:
+    return "\n".join(
+        [
+            "## Summary",
+            "",
+            format_pull_request_changed_files(changed_files),
+            "",
+            "## Verification",
+            "",
+            format_pull_request_verification_commands(config),
+            "",
+            "## Issue",
+            "",
+            f"Closes #{request.issue_number}",
+            "",
+            "## Notes",
+            "",
+            f"- Trigger command: `{config.command}`",
+            f"- Bot mode: `{config.mode}`",
+        ]
+    ).strip()
+
+
+def format_pull_request_changed_files(changed_files: list[str]) -> str:
+    if not changed_files:
+        return "- No file changes were detected."
+    return "\n".join(f"- `{path}`" for path in changed_files)
+
+
+def format_pull_request_verification_commands(config: BotConfig) -> str:
+    commands = get_check_commands(config)
+    if not commands:
+        return "- [ ] No verification commands configured."
+    return "\n".join(f"- [x] `{command}`" for command in commands)
 
 
 def create_issue_comment(

@@ -1,15 +1,16 @@
 ## Summary
 
-- 
+{{CHANGED_FILES}}
 
 ## Verification
 
-- [ ] `python -m unittest discover -s tests`
+{{VERIFICATION_COMMANDS}}
 
 ## Issue
 
-Closes #
+Closes #{{ISSUE_NUMBER}}
 
 ## Notes
 
-- 
+- Trigger command: `{{TRIGGER_COMMAND}}`
+- Bot mode: `{{BOT_MODE}}`
