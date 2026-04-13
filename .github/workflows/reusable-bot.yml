@@ -34,6 +34,8 @@ jobs:
         with:
           path: target-repo
           persist-credentials: false
+          fetch-depth: 1
+          clean: false
 
       - name: Checkout bot engine
         uses: actions/checkout@v4
@@ -42,6 +44,8 @@ jobs:
           ref: ${{ inputs.engine_ref }}
           path: engine-repo
           persist-credentials: false
+          fetch-depth: 1
+          clean: false
 
       - name: Reset target git state
         shell: powershell
@@ -57,16 +61,36 @@ jobs:
           app-id: ${{ vars.BOT_APP_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
 
-      - name: Build bot engine image
-        shell: powershell
-        run: docker build -t issue-to-pr-bot:ci engine-repo
-
-      - name: Verify Codex auth
+      - name: Resolve bot engine image tag
+        id: engine-image
         shell: powershell
         run: |
+          $dockerfilePath = Join-Path $env:GITHUB_WORKSPACE "engine-repo\Dockerfile"
+          $requirementsPath = Join-Path $env:GITHUB_WORKSPACE "engine-repo\requirements.txt"
+          $dockerfileHash = (Get-FileHash -LiteralPath $dockerfilePath -Algorithm SHA256).Hash.ToLower()
+          $requirementsHash = (Get-FileHash -LiteralPath $requirementsPath -Algorithm SHA256).Hash.ToLower()
+          $imageTag = "issue-to-pr-bot:ci-$($dockerfileHash.Substring(0, 12))-$($requirementsHash.Substring(0, 12))"
+          "image_tag=$imageTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Build bot engine image
+        shell: powershell
+        run: |
+          $imageTag = "${{ steps.engine-image.outputs.image_tag }}"
+          if (docker image inspect $imageTag *> $null) {
+            Write-Host "Reusing cached bot engine image: $imageTag"
+            exit 0
+          }
+          $env:DOCKER_BUILDKIT = "1"
+          docker build -t $imageTag engine-repo
+
+      - name: Run bot engine
+        shell: powershell
+        run: |
+          $imageTag = "${{ steps.engine-image.outputs.image_tag }}"
           $codexHome = if ($env:CODEX_HOME_HOST) { $env:CODEX_HOME_HOST } else { Join-Path $env:USERPROFILE ".codex" }
           $authPath = Join-Path $codexHome "auth.json"
           $configPath = Join-Path $codexHome "config.toml"
+          $targetWorkspace = Join-Path $env:GITHUB_WORKSPACE "target-repo"
 
           if (-not (Test-Path -LiteralPath $authPath)) {
             throw "Codex auth.json file not found: $authPath"
@@ -76,26 +100,6 @@ jobs:
             throw "Codex config.toml file not found: $configPath"
           }
 
-          docker run --rm `
-            --read-only `
-            --tmpfs /tmp:rw,noexec,nosuid,size=64m `
-            --tmpfs /home/bot/.codex:rw,noexec,nosuid,size=8m,uid=1000,gid=1000 `
-            --cap-drop ALL `
-            --security-opt no-new-privileges `
-            -v "${authPath}:/run/codex-auth/auth.json:ro" `
-            -v "${configPath}:/run/codex-auth/config.toml:ro" `
-            issue-to-pr-bot:ci `
-            sh -lc "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && codex --version && codex login status"
-        env:
-          CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
-
-      - name: Run bot engine
-        shell: powershell
-        run: |
-          $codexHome = if ($env:CODEX_HOME_HOST) { $env:CODEX_HOME_HOST } else { Join-Path $env:USERPROFILE ".codex" }
-          $authPath = Join-Path $codexHome "auth.json"
-          $configPath = Join-Path $codexHome "config.toml"
-          $targetWorkspace = Join-Path $env:GITHUB_WORKSPACE "target-repo"
           $dockerArgs = @(
             "run", "--rm",
             "--read-only",
@@ -134,10 +138,10 @@ jobs:
           }
 
           $dockerArgs += @(
-            "issue-to-pr-bot:ci",
+            $imageTag,
             "sh",
             "-lc",
-            "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && python -m app.main"
+            "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && codex --version && codex login status && python -m app.main"
           )
 
           docker @dockerArgs
