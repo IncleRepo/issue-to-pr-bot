@@ -76,7 +76,8 @@ jobs:
         shell: powershell
         run: |
           $imageTag = "${{ steps.engine-image.outputs.image_tag }}"
-          if (docker image inspect $imageTag *> $null) {
+          docker image inspect $imageTag 1>$null 2>$null
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "Reusing cached bot engine image: $imageTag"
             exit 0
           }
