@@ -24,6 +24,7 @@ from app.repo_context import (
     format_context_documents,
     get_external_context_root,
 )
+from app.repo_rules import resolve_bot_config
 from app.runtime_secrets import MissingSecretError, get_secrets_file_path, load_runtime_secrets
 from app.verification import VerificationError
 
@@ -65,7 +66,7 @@ def load_event_payload() -> dict:
 def main() -> None:
     configure_output_encoding()
     workspace = Path.cwd()
-    config = load_config(workspace)
+    config = resolve_bot_config(workspace, load_config(workspace))
     payload = load_event_payload()
     request = build_issue_request(payload)
 
@@ -131,7 +132,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         post_plan_comment(request, config, command, result.output)
         return
 
-    result = run_configured_mode(config.mode, request, workspace, command)
+    result = run_configured_mode(config.mode, request, workspace, config, command)
     if result.created:
         print(f"PR 생성 완료: {result.pull_request_url}")
         post_success_comment(request, config, command, result)
@@ -145,13 +146,14 @@ def run_configured_mode(
     mode: str,
     request: IssueRequest,
     workspace: Path,
+    config: BotConfig,
     command: BotCommand | None = None,
 ) -> PullRequestResult:
     normalized_mode = mode.strip().lower()
     if normalized_mode == "test-pr":
-        return create_test_pr(request, workspace)
+        return create_test_pr(request, workspace, config)
     if normalized_mode == "codex":
-        return create_codex_pr(request, workspace, command)
+        return create_codex_pr(request, workspace, config, command)
     raise RuntimeError(f"지원하지 않는 봇 모드입니다: {mode}")
 
 

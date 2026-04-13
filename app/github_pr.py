@@ -27,8 +27,12 @@ class PullRequestResult:
     changed_files: list[str]
 
 
-def create_test_pr(request: IssueRequest, workspace: Path) -> PullRequestResult:
-    config = load_config(workspace)
+def create_test_pr(
+    request: IssueRequest,
+    workspace: Path,
+    config: BotConfig | None = None,
+) -> PullRequestResult:
+    config = config or load_config(workspace)
     branch_name = checkout_bot_branch(request, workspace, config)
 
     write_marker_file(request, workspace, config)

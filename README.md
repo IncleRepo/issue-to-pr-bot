@@ -51,6 +51,10 @@ Pull Request 생성
 
 `.issue-to-pr-bot.yml`에서 저장소별 실행 옵션을 조정합니다.
 
+봇은 먼저 `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, PR 템플릿을 읽고 팀 규칙을 자동 적용합니다.
+문서 안에 브랜치 규칙, 커밋 메시지 규칙, PR 제목 규칙, 검증 명령이 적혀 있으면 그 값을 우선 사용합니다.
+아래 템플릿 필드는 그런 문서 규칙이 없을 때만 fallback으로 사용합니다.
+
 ```yaml
 bot:
   command: "/bot run"

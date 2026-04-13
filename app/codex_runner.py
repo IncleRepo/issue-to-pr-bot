@@ -11,7 +11,7 @@ from app.bot import (
     build_plan_prompt,
     build_task_prompt,
 )
-from app.config import BotConfig, load_config
+from app.config import BotConfig
 from app.github_pr import PullRequestResult, checkout_bot_branch, commit_push_and_open_pr
 from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
 from app.runtime_secrets import load_runtime_secrets
@@ -29,9 +29,9 @@ ALLOWED_EFFORTS = {"low", "medium", "high", "xhigh"}
 def create_codex_pr(
     request: IssueRequest,
     workspace: Path,
+    config: BotConfig,
     command: BotCommand | None = None,
 ) -> PullRequestResult:
-    config = load_config(workspace)
     branch_name = checkout_bot_branch(request, workspace, config)
 
     run_codex(request, workspace, config, command)

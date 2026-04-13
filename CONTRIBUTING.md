@@ -26,6 +26,14 @@ python -m venv .venv
 - Avoid broad refactors when fixing a narrow issue.
 - Add or update tests when behavior changes.
 
+## Automation Conventions
+
+The bot reads this document and applies these patterns automatically when they are present.
+
+- Branch format: `bot/{issue_number}{comment_suffix}-{slug}`
+- Commit format: `feat(issue-{issue_number}): {issue_title}`
+- PR title format: `[bot] #{issue_number} {issue_title}`
+
 ## Safety
 
 - Never commit `.venv/`, `.ruff_cache/`, `__pycache__/`, `.env`, private keys, or tokens.
