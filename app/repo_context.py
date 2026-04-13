@@ -5,6 +5,10 @@ from pathlib import Path
 from app.config import BotConfig
 
 
+DEFAULT_EXTERNAL_CONTEXT_DIR = Path("/run/external-context")
+EXTERNAL_CONTEXT_DIR_ENV = "BOT_EXTERNAL_CONTEXT_DIR"
+EXTERNAL_CONTEXT_PREFIX = "external:"
+
 MAX_CONTEXT_FILE_BYTES = 12_000
 MAX_CONTEXT_TOTAL_BYTES = 40_000
 MAX_PROJECT_TREE_ENTRIES = 140
@@ -31,36 +35,111 @@ class ContextDocument:
     truncated: bool
 
 
+class MissingContextError(RuntimeError):
+    def __init__(self, missing_paths: list[str]) -> None:
+        joined = ", ".join(missing_paths)
+        super().__init__(f"필수 context 문서를 찾을 수 없습니다: {joined}")
+        self.missing_paths = missing_paths
+
+
 def collect_context_documents(workspace: Path, config: BotConfig) -> list[ContextDocument]:
+    ensure_required_context_paths(workspace, config)
+
     documents: list[ContextDocument] = []
     total_bytes = 0
+    seen_paths: set[str] = set()
 
-    for configured_path in config.context_paths:
-        for path in expand_context_path(workspace, configured_path):
-            relative_path = path.relative_to(workspace.resolve()).as_posix()
-            if any(document.path == relative_path for document in documents):
+    total_bytes = collect_documents_from_root(
+        documents,
+        seen_paths,
+        total_bytes,
+        workspace,
+        config.context_paths,
+        path_prefix="",
+    )
+
+    external_root = get_external_context_root()
+    if external_root:
+        total_bytes = collect_documents_from_root(
+            documents,
+            seen_paths,
+            total_bytes,
+            external_root,
+            config.external_context_paths,
+            path_prefix="external/",
+        )
+
+    return documents
+
+
+def collect_documents_from_root(
+    documents: list[ContextDocument],
+    seen_paths: set[str],
+    total_bytes: int,
+    root: Path,
+    configured_paths: list[str],
+    path_prefix: str,
+) -> int:
+    for configured_path in configured_paths:
+        for path in expand_context_path(root, configured_path):
+            relative_path = path.relative_to(root.resolve()).as_posix()
+            display_path = f"{path_prefix}{relative_path}"
+            if display_path in seen_paths:
                 continue
 
             raw = path.read_bytes()
             remaining = MAX_CONTEXT_TOTAL_BYTES - total_bytes
             if remaining <= 0:
-                return documents
+                return total_bytes
 
             limit = min(MAX_CONTEXT_FILE_BYTES, remaining)
             truncated = len(raw) > limit
             content = raw[:limit].decode("utf-8", errors="replace")
             total_bytes += len(raw[:limit])
-            documents.append(ContextDocument(path=relative_path, content=content, truncated=truncated))
+            documents.append(ContextDocument(path=display_path, content=content, truncated=truncated))
+            seen_paths.add(display_path)
 
-    return documents
+    return total_bytes
 
 
-def expand_context_path(workspace: Path, configured_path: str) -> list[Path]:
-    path = (workspace / configured_path).resolve()
-    workspace = workspace.resolve()
+def ensure_required_context_paths(workspace: Path, config: BotConfig) -> None:
+    missing = [
+        configured_path
+        for configured_path in config.required_context_paths
+        if not required_context_exists(workspace, configured_path)
+    ]
+    if missing:
+        raise MissingContextError(missing)
+
+
+def required_context_exists(workspace: Path, configured_path: str) -> bool:
+    if configured_path.startswith(EXTERNAL_CONTEXT_PREFIX):
+        external_root = get_external_context_root()
+        if not external_root:
+            return False
+        target = configured_path[len(EXTERNAL_CONTEXT_PREFIX) :].strip()
+        return bool(expand_context_path(external_root, target))
+
+    return bool(expand_context_path(workspace, configured_path))
+
+
+def get_external_context_root() -> Path | None:
+    configured = os.getenv(EXTERNAL_CONTEXT_DIR_ENV)
+    path = Path(configured) if configured else DEFAULT_EXTERNAL_CONTEXT_DIR
+    if path.exists() and path.is_dir():
+        return path
+    return None
+
+
+def expand_context_path(root: Path, configured_path: str) -> list[Path]:
+    if not configured_path.strip():
+        return []
+
+    root = root.resolve()
+    path = (root / configured_path).resolve()
 
     try:
-        path.relative_to(workspace)
+        path.relative_to(root)
     except ValueError:
         return []
 

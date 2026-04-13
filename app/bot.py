@@ -119,6 +119,7 @@ def build_task_prompt(
     config: BotConfig | None = None,
     repository_context: str | None = None,
     project_summary: str | None = None,
+    available_secret_keys: list[str] | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -145,12 +146,16 @@ def build_task_prompt(
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
             "",
+            "Available secret environment variables (values hidden):",
+            format_secret_keys(available_secret_keys or []),
+            "",
             "Rules:",
             "- Create changes on a dedicated branch only.",
             "- Do not push directly to main.",
             "- Keep the change focused on the issue request.",
             "- Follow the repository guidance documents when they apply.",
             "- If the issue conflicts with repository guidance, prefer the repository guidance and explain the conflict.",
+            "- Use available secret environment variables when needed, but never print or commit their values.",
             "- Run all verification commands before opening a PR:",
             format_check_commands(get_check_commands(config)),
         ]
@@ -162,6 +167,7 @@ def build_plan_prompt(
     config: BotConfig | None = None,
     repository_context: str | None = None,
     project_summary: str | None = None,
+    available_secret_keys: list[str] | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -189,6 +195,9 @@ def build_plan_prompt(
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
             "",
+            "Available secret environment variables (values hidden):",
+            format_secret_keys(available_secret_keys or []),
+            "",
             "Configured verification commands:",
             format_check_commands(get_check_commands(config)),
             "",
@@ -205,3 +214,9 @@ def format_check_commands(commands: list[str]) -> str:
     if not commands:
         return "- No verification commands are configured."
     return "\n".join(f"- {command}" for command in commands)
+
+
+def format_secret_keys(secret_keys: list[str]) -> str:
+    if not secret_keys:
+        return "- No named secret environment variables were provided."
+    return "\n".join(f"- {key}" for key in secret_keys)

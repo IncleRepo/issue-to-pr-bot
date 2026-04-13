@@ -8,7 +8,9 @@ This repository is maintained with an issue-driven automation workflow. Agents m
 - Prefer small, reviewable patches over broad rewrites.
 - Preserve existing project structure and naming conventions unless the issue explicitly asks for a refactor.
 - Read `.issue-to-pr-bot.yml`, `CONTRIBUTING.md`, `README.md`, and GitHub templates before implementing.
+- Read mounted external context documents when `external_context_paths` are configured.
 - Do not commit secrets, tokens, private keys, local virtual environments, caches, or generated runner state.
+- Secret environment variable names may be available to the agent, but their values must never be printed, copied into files, or committed.
 - Do not modify `.github/workflows/**` unless the issue explicitly asks for workflow changes and the bot configuration allows it.
 - If required context is missing, stop and explain what is needed instead of guessing.
 

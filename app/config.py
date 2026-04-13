@@ -43,6 +43,10 @@ class BotConfig:
     check_commands: list[str] = field(default_factory=list)
     mode: str = "test-pr"
     context_paths: list[str] = field(default_factory=lambda: DEFAULT_CONTEXT_PATHS.copy())
+    external_context_paths: list[str] = field(default_factory=list)
+    required_context_paths: list[str] = field(default_factory=list)
+    secret_env_keys: list[str] = field(default_factory=list)
+    required_secret_env: list[str] = field(default_factory=list)
     protected_paths: list[str] = field(default_factory=lambda: DEFAULT_PROTECTED_PATHS.copy())
 
 
@@ -63,6 +67,19 @@ def load_config(workspace: Path) -> BotConfig:
         check_commands=as_string_list(values.get("check_commands"), defaults.check_commands),
         mode=values.get("mode", defaults.mode),
         context_paths=as_string_list(values.get("context_paths"), defaults.context_paths),
+        external_context_paths=as_string_list(
+            values.get("external_context_paths"),
+            defaults.external_context_paths,
+        ),
+        required_context_paths=as_string_list(
+            values.get("required_context_paths"),
+            defaults.required_context_paths,
+        ),
+        secret_env_keys=as_string_list(values.get("secret_env_keys"), defaults.secret_env_keys),
+        required_secret_env=as_string_list(
+            values.get("required_secret_env"),
+            defaults.required_secret_env,
+        ),
         protected_paths=as_string_list(values.get("protected_paths"), defaults.protected_paths),
     )
 

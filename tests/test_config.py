@@ -23,6 +23,15 @@ bot:
   context_paths:
     - "README.md"
     - "docs"
+  external_context_paths:
+    - "product"
+  required_context_paths:
+    - "README.md"
+    - "external:product/domain.md"
+  secret_env_keys:
+    - "DB_URL"
+  required_secret_env:
+    - "DB_URL"
   protected_paths:
     - ".github/workflows/**"
 """
@@ -40,6 +49,10 @@ bot:
         )
         self.assertEqual(values["mode"], "codex")
         self.assertEqual(values["context_paths"], ["README.md", "docs"])
+        self.assertEqual(values["external_context_paths"], ["product"])
+        self.assertEqual(values["required_context_paths"], ["README.md", "external:product/domain.md"])
+        self.assertEqual(values["secret_env_keys"], ["DB_URL"])
+        self.assertEqual(values["required_secret_env"], ["DB_URL"])
         self.assertEqual(values["protected_paths"], [".github/workflows/**"])
 
     def test_load_config_returns_defaults_without_file(self) -> None:
@@ -66,6 +79,10 @@ bot:
         self.assertEqual(config.branch_prefix, "agent")
         self.assertEqual(config.output_dir, "bot-output")
         self.assertIn("README.md", config.context_paths)
+        self.assertEqual(config.external_context_paths, [])
+        self.assertEqual(config.required_context_paths, [])
+        self.assertEqual(config.secret_env_keys, [])
+        self.assertEqual(config.required_secret_env, [])
         self.assertIn(".github/workflows/**", config.protected_paths)
 
     def test_get_check_commands_prefers_explicit_commands(self) -> None:

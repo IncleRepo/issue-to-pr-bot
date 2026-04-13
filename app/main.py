@@ -15,7 +15,13 @@ from app.bot import (
 from app.codex_runner import create_codex_pr, run_codex_plan
 from app.config import BotConfig, get_check_commands, load_config
 from app.github_pr import PullRequestResult, create_issue_comment, create_test_pr
-from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
+from app.repo_context import (
+    MissingContextError,
+    collect_context_documents,
+    collect_project_summary,
+    format_context_documents,
+)
+from app.runtime_secrets import MissingSecretError, load_runtime_secrets
 from app.verification import VerificationError
 
 
@@ -64,11 +70,18 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         print("봇 실행 명령이 없어 종료합니다.")
         return
 
+    available_secret_keys = load_runtime_secrets(config)
     branch_name = build_branch_name(request, config)
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
     project_summary = collect_project_summary(workspace)
-    task_prompt = build_task_prompt(request, config, repository_context, project_summary)
+    task_prompt = build_task_prompt(
+        request,
+        config,
+        repository_context,
+        project_summary,
+        available_secret_keys,
+    )
 
     print("봇 실행 시작")
     print(f"저장소: {request.repository}")
@@ -79,6 +92,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     print(f"봇 모드: {config.mode}")
     print(f"봇 명령: {command.action}")
     print(f"검증 명령: {format_check_commands(config)}")
+    print(f"사용 가능한 secret env: {format_secret_keys_for_log(available_secret_keys)}")
     print(f"작업 브랜치: {branch_name}")
     print(f"저장소 규칙 문서: {len(documents)}개")
     print("작업 프롬프트:")
@@ -209,6 +223,12 @@ def format_check_commands(config: BotConfig) -> str:
     return ", ".join(f"`{command}`" for command in commands)
 
 
+def format_secret_keys_for_log(secret_keys: list[str]) -> str:
+    if not secret_keys:
+        return "`none`"
+    return ", ".join(f"`{key}`" for key in secret_keys)
+
+
 def format_failure_detail(error: Exception) -> str:
     if isinstance(error, VerificationError):
         output = truncate_text(error.output.strip(), 1800)
@@ -219,6 +239,22 @@ def format_failure_detail(error: Exception) -> str:
                 "```text",
                 output or "(no output)",
                 "```",
+            ]
+        )
+    if isinstance(error, MissingContextError):
+        return "\n".join(
+            [
+                "누락된 context:",
+                "",
+                "\n".join(f"- `{path}`" for path in error.missing_paths),
+            ]
+        )
+    if isinstance(error, MissingSecretError):
+        return "\n".join(
+            [
+                "누락된 secret env:",
+                "",
+                "\n".join(f"- `{key}`" for key in error.missing_keys),
             ]
         )
     return "Actions 로그에서 자세한 실패 지점을 확인해 주세요."

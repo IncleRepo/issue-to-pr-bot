@@ -62,8 +62,19 @@ bot:
   check_commands:
     - "python -m compileall -q app tests"
     - "python -m unittest discover -s tests"
+  external_context_paths:
+    - "product"
+  required_context_paths:
+    - "README.md"
+    - "external:product/domain.md"
+  secret_env_keys:
+    - "DB_URL"
+  required_secret_env:
+    - "DB_URL"
   mode: "codex"
 ```
+
+`external:` 접두사는 runner가 마운트한 외부 context 디렉터리 기준 경로를 뜻합니다.
 
 ## 🧾 PR 템플릿
 
@@ -77,6 +88,26 @@ bot:
 - `{{VERIFICATION_COMMANDS}}`
 - `{{TRIGGER_COMMAND}}`
 - `{{BOT_MODE}}`
+
+## 🔐 외부 문서와 secret 전달
+
+외부 문서와 도메인 자료는 self-hosted runner 호스트의 디렉터리를 read-only로 마운트해서 전달합니다.
+
+- GitHub Actions variable `BOT_CONTEXT_DIR_HOST`
+  - 예: `C:\bot-context\issue-to-pr-bot`
+- 컨테이너 내부 경로
+  - `/run/external-context`
+- `.issue-to-pr-bot.yml`의 `external_context_paths`와 `required_context_paths`로 읽을 문서를 제어
+
+비밀 정보는 env 파일을 read-only로 마운트해서 전달합니다.
+
+- GitHub Actions variable `BOT_SECRETS_FILE_HOST`
+  - 예: `C:\bot-secrets\issue-to-pr-bot.env`
+- 컨테이너 내부 경로
+  - `/run/bot-secrets/secrets.env`
+- `.issue-to-pr-bot.yml`의 `secret_env_keys`로 Codex에 “사용 가능한 키 이름만” 알림
+- 실제 값은 프롬프트에 넣지 않음
+- `required_secret_env`에 지정한 키가 없으면 작업을 중단하고 이슈 댓글로 실패를 남김
 
 ## 📌 향후 확장 계획
 
