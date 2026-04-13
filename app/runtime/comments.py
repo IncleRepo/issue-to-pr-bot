@@ -163,7 +163,7 @@ def post_success_comment(
             f"- effort: `{runtime_options.effort or 'default'}`",
             f"- 브랜치: `{result.branch_name}`",
             f"- PR: {result.pull_request_url}",
-            f"- 검증 명령: {format_verification_status(config, runtime_options)}",
+            f"- 검증 명령: {format_verification_status(config, runtime_options, result.verification_commands)}",
             f"- 변경 파일 수: `{len(result.changed_files)}`",
             f"- 첨부 처리: {format_attachment_summary(attachment_info)}",
             f"- 머지 요청 상태: `{format_merge_request_status(merge_result)}`",
@@ -261,9 +261,17 @@ def format_runtime_options(runtime_options: BotRuntimeOptions) -> str:
     return ", ".join(parts)
 
 
-def format_verification_status(config: BotConfig, runtime_options: BotRuntimeOptions) -> str:
+def format_verification_status(
+    config: BotConfig,
+    runtime_options: BotRuntimeOptions,
+    commands: list[str] | None = None,
+) -> str:
     if not runtime_options.verify:
         return "`검증 생략`"
+    if commands is not None:
+        if not commands:
+            return "`이 변경 범위에서는 추가 검증 없음`"
+        return ", ".join(f"`{command}`" for command in commands)
     return format_check_commands(config)
 
 

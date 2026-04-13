@@ -3,7 +3,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.bot import IssueRequest
 from app.config import BotConfig, get_check_commands
+from app.verification_policy import VerificationPlan, build_verification_plan
 
 
 @dataclass(frozen=True)
@@ -20,8 +22,12 @@ class VerificationError(RuntimeError):
         self.returncode = returncode
 
 
-def run_verification(config: BotConfig, workspace: Path) -> list[VerificationResult]:
-    configured_commands = get_check_commands(config)
+def run_verification(
+    config: BotConfig,
+    workspace: Path,
+    commands: list[str] | None = None,
+) -> list[VerificationResult]:
+    configured_commands = commands if commands is not None else get_check_commands(config)
     if not configured_commands:
         print("설정된 테스트 명령이 없어 검증을 건너뜁니다.")
         return []
@@ -52,3 +58,51 @@ def run_verification(config: BotConfig, workspace: Path) -> list[VerificationRes
         results.append(VerificationResult(command=configured_command, output=output))
 
     return results
+
+
+def resolve_verification_plan(
+    config: BotConfig,
+    workspace: Path,
+    request: IssueRequest | None = None,
+) -> VerificationPlan:
+    return build_verification_plan(
+        candidate_commands=get_check_commands(config),
+        changed_files=collect_workspace_changes(workspace),
+        request=request,
+    )
+
+
+def collect_workspace_changes(workspace: Path) -> list[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "status",
+            "--porcelain",
+        ],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return []
+
+    changed_files: list[str] = []
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].strip()
+        if not path:
+            continue
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        normalized = path.replace("\\", "/")
+        if normalized not in changed_files:
+            changed_files.append(normalized)
+    return changed_files

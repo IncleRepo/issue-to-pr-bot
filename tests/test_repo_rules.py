@@ -38,6 +38,29 @@ class RepoRulesTest(unittest.TestCase):
             ],
         )
 
+    def test_resolve_bot_config_ignores_setup_commands_in_verification_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath("README.md").write_text(
+                "\n".join(
+                    [
+                        "# Repo",
+                        "",
+                        "## 로컬 검증",
+                        "",
+                        "```powershell",
+                        "python -m venv .venv",
+                        "python -m unittest discover -s tests",
+                        "```",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_bot_config(workspace, BotConfig())
+
+        self.assertEqual(get_check_commands(resolved), ["python -m unittest discover -s tests"])
+
     def test_resolve_bot_config_infers_branch_commit_and_pr_title_templates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

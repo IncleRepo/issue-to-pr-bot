@@ -5,7 +5,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -28,6 +28,7 @@ class PullRequestResult:
     pull_request_url: str | None
     created: bool
     changed_files: list[str]
+    verification_commands: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ def create_test_pr(
         base_branch=target.base_branch,
         commit_message=build_test_commit_message(request, config),
         add_paths=[config.output_dir],
+        verification_commands=[],
     )
 
 
@@ -177,6 +179,7 @@ def commit_push_and_open_pr(
     base_branch: str,
     commit_message: str,
     add_paths: list[str] | None = None,
+    verification_commands: list[str] | None = None,
 ) -> PullRequestResult:
     token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
     if not token:
@@ -197,6 +200,7 @@ def commit_push_and_open_pr(
             pull_request_url=None,
             created=False,
             changed_files=[],
+            verification_commands=verification_commands or [],
         )
 
     changed_files = get_staged_files(workspace)
@@ -212,6 +216,7 @@ def commit_push_and_open_pr(
         config,
         workspace,
         changed_files,
+        verification_commands or [],
     )
 
     return PullRequestResult(
@@ -219,6 +224,7 @@ def commit_push_and_open_pr(
         pull_request_url=pr_url,
         created=True,
         changed_files=changed_files,
+        verification_commands=verification_commands or [],
     )
 
 
@@ -373,6 +379,7 @@ def ensure_pull_request(
     config: BotConfig,
     workspace: Path,
     changed_files: list[str],
+    verification_commands: list[str],
 ) -> str:
     existing_url = find_existing_pull_request(repository, branch_name, base_branch, token)
     if existing_url:
@@ -380,7 +387,7 @@ def ensure_pull_request(
         return existing_url
 
     owner = repository.split("/", 1)[0]
-    body = build_pull_request_body(request, config, workspace, changed_files)
+    body = build_pull_request_body(request, config, workspace, changed_files, verification_commands)
     payload = {
         "title": build_pull_request_title(request, config),
         "head": f"{owner}:{branch_name}",
@@ -491,10 +498,11 @@ def build_pull_request_body(
     config: BotConfig,
     workspace: Path,
     changed_files: list[str],
+    verification_commands: list[str] | None = None,
 ) -> str:
     template = load_pull_request_template(workspace)
     if not template:
-        return build_default_pull_request_body(request, config, changed_files)
+        return build_default_pull_request_body(request, config, changed_files, verification_commands)
 
     rendered = template
     replacements = {
@@ -503,7 +511,7 @@ def build_pull_request_body(
         "{{TRIGGER_COMMAND}}": request.comment_body.strip(),
         "{{BOT_MODE}}": config.mode,
         "{{CHANGED_FILES}}": format_pull_request_changed_files(changed_files),
-        "{{VERIFICATION_COMMANDS}}": format_pull_request_verification_commands(config),
+        "{{VERIFICATION_COMMANDS}}": format_pull_request_verification_commands(config, verification_commands),
     }
     for placeholder, value in replacements.items():
         rendered = rendered.replace(placeholder, value)
@@ -543,6 +551,7 @@ def build_default_pull_request_body(
     request: IssueRequest,
     config: BotConfig,
     changed_files: list[str],
+    verification_commands: list[str] | None = None,
 ) -> str:
     return "\n".join(
         [
@@ -552,7 +561,7 @@ def build_default_pull_request_body(
             "",
             "## 검증",
             "",
-            format_pull_request_verification_commands(config),
+            format_pull_request_verification_commands(config, verification_commands),
             "",
             "## 이슈",
             "",
@@ -574,10 +583,13 @@ def format_pull_request_changed_files(changed_files: list[str]) -> str:
     return "\n".join(f"- `{path}`" for path in changed_files)
 
 
-def format_pull_request_verification_commands(config: BotConfig) -> str:
-    commands = get_check_commands(config)
+def format_pull_request_verification_commands(
+    config: BotConfig,
+    verification_commands: list[str] | None = None,
+) -> str:
+    commands = verification_commands if verification_commands is not None else get_check_commands(config)
     if not commands:
-        return "- [ ] No verification commands configured."
+        return "- [ ] No verification commands selected for this change scope."
     return "\n".join(f"- [x] `{command}`" for command in commands)
 
 

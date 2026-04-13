@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from app.config import BotConfig
+from app.verification_policy import is_setup_command
 
 
 RULE_SOURCES = [
@@ -212,7 +213,7 @@ def extract_commands_from_code_block(block: str) -> list[str]:
         stripped = line.strip()
         if not stripped:
             continue
-        if COMMAND_PATTERN.match(stripped):
+        if COMMAND_PATTERN.match(stripped) and not is_setup_command(stripped):
             commands.append(stripped)
     return commands
 

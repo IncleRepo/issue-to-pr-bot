@@ -96,13 +96,14 @@ class GitHubPrTest(unittest.TestCase):
                 config,
                 workspace,
                 ["README.md", "app/main.py"],
+                ["python -m compileall -q app tests"],
             )
 
         self.assertIn("Closes #7", body)
         self.assertIn("- `README.md`", body)
         self.assertIn("- `app/main.py`", body)
         self.assertIn("- [x] `python -m compileall -q app tests`", body)
-        self.assertIn("- [x] `python -m unittest discover -s tests`", body)
+        self.assertNotIn("- [x] `python -m unittest discover -s tests`", body)
         self.assertIn("- Trigger comment: `@incle-issue-to-pr-bot README 수정해줘. codex high로.`", body)
         self.assertIn("- Bot mode: `codex`", body)
         self.assertIn(BOT_PR_MARKER, body)
