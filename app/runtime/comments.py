@@ -3,6 +3,7 @@
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.attachments import AttachmentContext
 from app.config import BOT_MENTION, BotConfig, get_check_commands
@@ -416,8 +417,22 @@ def safe_create_issue_comment(request: IssueRequest, body: str) -> None:
         comment_url = create_issue_comment(request.repository, request.issue_number, body)
         if comment_url:
             print(f"이슈 댓글 생성됨: {comment_url}")
+            write_comment_marker()
     except Exception as comment_error:
         print(f"이슈 댓글 생성 실패: {comment_error}")
+
+
+def write_comment_marker() -> None:
+    marker_path = os.getenv("BOT_COMMENT_MARKER_FILE", "").strip()
+    if not marker_path:
+        return
+
+    try:
+        path = Path(marker_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("comment-posted\n", encoding="utf-8")
+    except Exception as marker_error:
+        print(f"댓글 마커 파일 기록 실패: {marker_error}")
 
 
 def configure_output_encoding() -> None:

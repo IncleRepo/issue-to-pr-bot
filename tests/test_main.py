@@ -12,6 +12,7 @@ from app.main import (
     format_failure_next_steps,
     format_missing_status,
     handle_pull_request_review_payload,
+    safe_create_issue_comment,
 )
 from app.verification import VerificationError
 
@@ -111,6 +112,35 @@ class MainTest(unittest.TestCase):
 
         auto_merge_mock.assert_called_once_with(payload)
         run_bot_mock.assert_not_called()
+
+    @patch("app.runtime.comments.create_issue_comment", return_value="https://example.com/comment/1")
+    def test_safe_create_issue_comment_writes_marker_when_comment_succeeds(self, create_comment_mock) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=3,
+            issue_title="Failure case",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 다시 시도해줘",
+            comment_author="IncleRepo",
+            comment_id=3,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker_path = Path(temp_dir) / "comment-posted"
+            with patch.dict(
+                os.environ,
+                {
+                    "BOT_CREATE_PR": "1",
+                    "BOT_COMMENT_MARKER_FILE": str(marker_path),
+                },
+                clear=True,
+            ):
+                safe_create_issue_comment(request, "body")
+
+            self.assertTrue(marker_path.exists())
+            self.assertIn("comment-posted", marker_path.read_text(encoding="utf-8"))
+
+        create_comment_mock.assert_called_once()
 
 
 if __name__ == "__main__":

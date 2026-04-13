@@ -30,6 +30,7 @@ jobs:
 
     steps:
       - name: Checkout target repository
+        id: checkout-target
         uses: actions/checkout@v4
         with:
           path: target-repo
@@ -38,6 +39,7 @@ jobs:
           clean: false
 
       - name: Checkout bot engine
+        id: checkout-engine
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.engine_repository }}
@@ -48,6 +50,7 @@ jobs:
           clean: false
 
       - name: Reset target git state
+        id: reset-target
         shell: powershell
         run: |
           git -C target-repo config core.autocrlf false
@@ -73,6 +76,7 @@ jobs:
           "image_tag=$imageTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build bot engine image
+        id: build-engine-image
         shell: powershell
         run: |
           $imageTag = "${{ steps.engine-image.outputs.image_tag }}"
@@ -85,6 +89,7 @@ jobs:
           docker build -t $imageTag engine-repo
 
       - name: Run bot engine
+        id: run-bot-engine
         shell: powershell
         run: |
           $imageTag = "${{ steps.engine-image.outputs.image_tag }}"
@@ -92,6 +97,9 @@ jobs:
           $authPath = Join-Path $codexHome "auth.json"
           $configPath = Join-Path $codexHome "config.toml"
           $targetWorkspace = Join-Path $env:GITHUB_WORKSPACE "target-repo"
+          $botStatusDir = Join-Path $env:RUNNER_TEMP "issue-to-pr-bot-status"
+
+          New-Item -ItemType Directory -Force -Path $botStatusDir | Out-Null
 
           if (-not (Test-Path -LiteralPath $authPath)) {
             throw "Codex auth.json file not found: $authPath"
@@ -118,10 +126,12 @@ jobs:
             "-e", "BOT_RESET_WORKTREE=1",
             "-e", "BOT_EXTERNAL_CONTEXT_DIR=/run/external-context",
             "-e", "BOT_SECRETS_FILE=/run/bot-secrets/secrets.env",
+            "-e", "BOT_COMMENT_MARKER_FILE=/run/bot-status/comment-posted",
             "-v", "${targetWorkspace}:/workspace",
             "-v", "${env:GITHUB_EVENT_PATH}:/tmp/github_event.json:ro",
             "-v", "${authPath}:/run/codex-auth/auth.json:ro",
-            "-v", "${configPath}:/run/codex-auth/config.toml:ro"
+            "-v", "${configPath}:/run/codex-auth/config.toml:ro",
+            "-v", "${botStatusDir}:/run/bot-status"
           )
 
           if ($env:BOT_CONTEXT_DIR_HOST) {
@@ -153,3 +163,73 @@ jobs:
           CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
           BOT_CONTEXT_DIR_HOST: ${{ vars.BOT_CONTEXT_DIR_HOST }}
           BOT_SECRETS_FILE_HOST: ${{ vars.BOT_SECRETS_FILE_HOST }}
+
+      - name: Comment on workflow failure
+        if: failure()
+        shell: powershell
+        run: |
+          $markerPath = Join-Path $env:RUNNER_TEMP "issue-to-pr-bot-status\comment-posted"
+          if (Test-Path -LiteralPath $markerPath) {
+            Write-Host "Bot already posted a status comment. Skipping fallback workflow failure comment."
+            exit 0
+          }
+
+          $event = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+          $issueNumber = $null
+
+          if ($event.issue -and $event.issue.number) {
+            $issueNumber = [int]$event.issue.number
+          } elseif ($event.pull_request -and $event.pull_request.number) {
+            $issueNumber = [int]$event.pull_request.number
+          }
+
+          if (-not $issueNumber) {
+            Write-Host "Could not determine issue or pull request number for fallback comment."
+            exit 0
+          }
+
+          $failedStep = "unknown"
+          $stepOutcomes = @(
+            @{ Name = "Checkout target repository"; Outcome = "${{ steps.checkout-target.outcome }}" },
+            @{ Name = "Checkout bot engine"; Outcome = "${{ steps.checkout-engine.outcome }}" },
+            @{ Name = "Reset target git state"; Outcome = "${{ steps.reset-target.outcome }}" },
+            @{ Name = "Create GitHub App token"; Outcome = "${{ steps.app-token.outcome }}" },
+            @{ Name = "Resolve bot engine image tag"; Outcome = "${{ steps.engine-image.outcome }}" },
+            @{ Name = "Build bot engine image"; Outcome = "${{ steps.build-engine-image.outcome }}" },
+            @{ Name = "Run bot engine"; Outcome = "${{ steps.run-bot-engine.outcome }}" }
+          )
+
+          foreach ($step in $stepOutcomes) {
+            if ($step.Outcome -eq "failure") {
+              $failedStep = $step.Name
+              break
+            }
+          }
+
+          $runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $body = @"
+## 실행 결과
+
+### 요약
+- 상태: `failed`
+- 실패 단계: `$failedStep`
+- 오류 분류: `workflow`
+
+### 상세
+봇 엔진이 이슈 댓글을 남기기 전에 워크플로 단계에서 실패했습니다.
+
+### 다음 단계
+- Actions 로그 확인: $runUrl
+- 같은 멘션으로 다시 요청해 재시도
+"@.Trim()
+
+          $payload = @{ body = $body } | ConvertTo-Json -Depth 3
+          $headers = @{
+            Accept = "application/vnd.github+json"
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/issues/$issueNumber/comments"
+          Invoke-RestMethod -Method Post -Uri $uri -Headers $headers -ContentType "application/json" -Body $payload | Out-Null
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
