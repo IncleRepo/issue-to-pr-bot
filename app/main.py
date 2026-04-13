@@ -5,6 +5,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.attachments import collect_attachment_context, format_attachment_context
 from app.bot import (
     BotCommand,
     IssueRequest,
@@ -92,6 +93,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         return
 
     available_secret_keys = load_runtime_secrets(config)
+    attachment_context = format_attachment_context(collect_attachment_context(request))
     branch_name = build_branch_name(request, config)
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
@@ -102,6 +104,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         repository_context,
         project_summary,
         available_secret_keys,
+        attachment_context,
     )
 
     print("봇 실행 시작")

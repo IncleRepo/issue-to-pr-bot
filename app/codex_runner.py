@@ -3,6 +3,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.attachments import collect_attachment_context, format_attachment_context
 from app.bot import BotCommand, IssueRequest, build_plan_prompt, build_task_prompt
 from app.config import BotConfig, load_config
 from app.github_pr import PullRequestResult, checkout_bot_branch, commit_push_and_open_pr
@@ -46,6 +47,7 @@ def run_codex(
     bot_command: BotCommand | None = None,
 ) -> CodexRunResult:
     available_secret_keys = load_runtime_secrets(config)
+    attachment_context = format_attachment_context(collect_attachment_context(request))
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
     project_summary = collect_project_summary(workspace)
@@ -55,6 +57,7 @@ def run_codex(
         repository_context,
         project_summary,
         available_secret_keys,
+        attachment_context,
     )
     command = build_codex_command(workspace, effort=get_effort(bot_command))
 
@@ -87,6 +90,7 @@ def run_codex_plan(
     bot_command: BotCommand | None = None,
 ) -> CodexRunResult:
     available_secret_keys = load_runtime_secrets(config)
+    attachment_context = format_attachment_context(collect_attachment_context(request))
     documents = collect_context_documents(workspace, config)
     repository_context = format_context_documents(documents)
     project_summary = collect_project_summary(workspace)
@@ -96,6 +100,7 @@ def run_codex_plan(
         repository_context,
         project_summary,
         available_secret_keys,
+        attachment_context,
     )
     output_path = Path(tempfile.gettempdir()) / "issue-to-pr-bot-codex-plan.txt"
     command = build_codex_command(

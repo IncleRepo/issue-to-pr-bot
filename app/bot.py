@@ -137,6 +137,7 @@ def build_task_prompt(
     repository_context: str | None = None,
     project_summary: str | None = None,
     available_secret_keys: list[str] | None = None,
+    attachment_context: str | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -163,6 +164,9 @@ def build_task_prompt(
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
             "",
+            "Issue/comment attachments:",
+            attachment_context or "No supported issue or comment attachments were collected.",
+            "",
             "Available secret environment variables (values hidden):",
             format_secret_keys(available_secret_keys or []),
             "",
@@ -185,6 +189,7 @@ def build_plan_prompt(
     repository_context: str | None = None,
     project_summary: str | None = None,
     available_secret_keys: list[str] | None = None,
+    attachment_context: str | None = None,
 ) -> str:
     config = config or BotConfig()
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -211,6 +216,9 @@ def build_plan_prompt(
             "",
             "Repository context:",
             repository_context or "No repository guidance documents were provided.",
+            "",
+            "Issue/comment attachments:",
+            attachment_context or "No supported issue or comment attachments were collected.",
             "",
             "Available secret environment variables (values hidden):",
             format_secret_keys(available_secret_keys or []),
