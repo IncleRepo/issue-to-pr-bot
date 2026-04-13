@@ -546,22 +546,22 @@ def build_default_pull_request_body(
 ) -> str:
     return "\n".join(
         [
-            "## Summary",
+            "## 요약",
             "",
             format_pull_request_changed_files(changed_files),
             "",
-            "## Verification",
+            "## 검증",
             "",
             format_pull_request_verification_commands(config),
             "",
-            "## Issue",
+            "## 이슈",
             "",
             f"Closes #{request.issue_number}",
             "",
-            "## Notes",
+            "## 참고",
             "",
-            f"- Trigger comment: `{request.comment_body.strip()}`",
-            f"- Bot mode: `{config.mode}`",
+            f"- 트리거 댓글: `{request.comment_body.strip()}`",
+            f"- 봇 모드: `{config.mode}`",
             "",
             BOT_PR_MARKER,
         ]

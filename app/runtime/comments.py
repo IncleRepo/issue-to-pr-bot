@@ -1,4 +1,4 @@
-"""GitHub-facing execution reports and small formatting helpers."""
+"""GitHub 댓글과 사용자-facing 실행 결과 포맷을 담당한다."""
 
 import os
 import sys
@@ -25,17 +25,18 @@ class BotStatusSnapshot:
 
 
 def post_help_comment(request: IssueRequest, config: BotConfig) -> None:
+    del config
     body = "\n".join(
         [
-            "## Usage",
+            "## 사용법",
             "",
-            f"- Mention `{BOT_MENTION}` and write the request in natural language.",
-            "- `plan`, `계획`, `설계만` => plan only",
-            "- `status`, `state`, `상태` => status snapshot",
-            "- `help`, `usage`, `사용법` => this help message",
-            "- `merge`, `머지`, `승인되면 머지` => register auto-merge intent on a PR",
+            f"- `{BOT_MENTION}` 뒤에 자연어로 요청을 적으면 됩니다.",
+            "- `계획`, `설계만`, `plan` -> 계획만 작성",
+            "- `상태`, `status`, `state` -> 현재 설정과 누락 항목 확인",
+            "- `도움말`, `사용법`, `help`, `usage` -> 사용법 보기",
+            "- `머지`, `승인되면 머지`, `merge` -> PR 머지 요청 등록",
             "",
-            "Examples:",
+            "### 예시",
             f"- `{BOT_MENTION} README 로컬 실행 방법 추가해줘`",
             f"- `{BOT_MENTION} 이 리뷰 반영해줘. main 반영하고 충돌 해결해줘`",
             f"- `{BOT_MENTION} 승인되면 머지해줘`",
@@ -43,36 +44,35 @@ def post_help_comment(request: IssueRequest, config: BotConfig) -> None:
             format_run_url(),
         ]
     ).strip()
-    del config
     safe_create_issue_comment(request, body)
 
 
 def post_status_comment(request: IssueRequest, config: BotConfig, snapshot: BotStatusSnapshot) -> None:
     body = "\n".join(
         [
-            "## Bot Status",
+            "## 봇 상태",
             "",
-            "### Defaults",
-            f"- mention: `{BOT_MENTION}`",
-            f"- mode: `{config.mode}`",
+            "### 기본값",
+            f"- 멘션: `{BOT_MENTION}`",
+            f"- 모드: `{config.mode}`",
             f"- provider: `{config.provider}`",
-            f"- branch prefix: `{config.branch_prefix}`",
+            f"- 브랜치 prefix: `{config.branch_prefix}`",
             "",
-            "### Verification",
+            "### 검증 명령",
             format_markdown_list(get_check_commands(config), code=True),
             "",
-            "### Context",
-            f"- repository context paths: `{len(config.context_paths)}`",
-            f"- external context paths: `{len(config.external_context_paths)}`",
-            f"- loaded context documents: `{snapshot.context_document_count}`",
-            f"- external context root: `{snapshot.external_context_root or 'not mounted'}`",
+            "### 컨텍스트",
+            f"- 저장소 컨텍스트 경로 수: `{len(config.context_paths)}`",
+            f"- 외부 컨텍스트 경로 수: `{len(config.external_context_paths)}`",
+            f"- 실제 로드된 문서 수: `{snapshot.context_document_count}`",
+            f"- 외부 컨텍스트 루트: `{snapshot.external_context_root or '마운트되지 않음'}`",
             "",
-            "### Secrets",
-            f"- secret env file: `{snapshot.secrets_file_path}`",
-            f"- secret env file exists: `{'yes' if snapshot.secrets_file_exists else 'no'}`",
-            f"- available secret keys: {format_secret_keys_for_log(snapshot.available_secret_keys)}",
+            "### 시크릿",
+            f"- 시크릿 env 파일: `{snapshot.secrets_file_path}`",
+            f"- 시크릿 env 파일 존재 여부: `{'예' if snapshot.secrets_file_exists else '아니오'}`",
+            f"- 사용 가능한 시크릿 키: {format_secret_keys_for_log(snapshot.available_secret_keys)}",
             "",
-            "### Missing",
+            "### 누락 항목",
             format_missing_status(snapshot),
             "",
             format_run_url(),
@@ -90,19 +90,19 @@ def post_merge_request_comment(
     status = "merged" if merge_result.merged else "pending"
     body = "\n".join(
         [
-            "## Execution Result",
+            "## 실행 결과",
             "",
-            "### Summary",
-            f"- status: `{status}`",
-            f"- action: `{command.action}`",
-            f"- mode: `{runtime_options.mode}`",
+            "### 요약",
+            f"- 상태: `{status}`",
+            f"- 액션: `{command.action}`",
+            f"- 모드: `{runtime_options.mode}`",
             f"- provider: `{runtime_options.provider}`",
-            "- merge requested: `yes`",
+            "- 머지 요청: `예`",
             f"- PR: {merge_result.pull_request_url}",
             (
-                f"- merge commit: `{merge_result.merge_sha}`"
+                f"- 머지 커밋: `{merge_result.merge_sha}`"
                 if merge_result.merge_sha
-                else "- merge status: waiting for GitHub branch protection requirements"
+                else "- 머지 상태: GitHub 보호 규칙 조건을 기다리는 중"
             ),
             "",
             format_run_url(),
@@ -122,17 +122,17 @@ def post_plan_comment(
     del config
     body = "\n".join(
         [
-            "## Execution Result",
+            "## 실행 결과",
             "",
-            "### Summary",
-            "- status: `planned`",
-            f"- action: `{command.action}`",
-            f"- mode: `{runtime_options.mode}`",
+            "### 요약",
+            "- 상태: `planned`",
+            f"- 액션: `{command.action}`",
+            f"- 모드: `{runtime_options.mode}`",
             f"- provider: `{runtime_options.provider}`",
-            f"- verify: `{'on' if runtime_options.verify else 'off'}`",
-            f"- attachments: {format_attachment_summary(attachment_info)}",
+            f"- 검증: `{'실행' if runtime_options.verify else '생략'}`",
+            f"- 첨부 처리: {format_attachment_summary(attachment_info)}",
             "",
-            "### Plan",
+            "### 계획",
             trim_codex_output(plan_output),
             "",
             format_run_url(),
@@ -152,23 +152,23 @@ def post_success_comment(
 ) -> None:
     body = "\n".join(
         [
-            "## Execution Result",
+            "## 실행 결과",
             "",
-            "### Summary",
-            "- status: `success`",
-            f"- action: `{command.action}`",
-            f"- mode: `{runtime_options.mode}`",
+            "### 요약",
+            "- 상태: `success`",
+            f"- 액션: `{command.action}`",
+            f"- 모드: `{runtime_options.mode}`",
             f"- provider: `{runtime_options.provider}`",
-            f"- verify: `{'on' if runtime_options.verify else 'off'}`",
+            f"- 검증: `{'실행' if runtime_options.verify else '생략'}`",
             f"- effort: `{runtime_options.effort or 'default'}`",
-            f"- branch: `{result.branch_name}`",
+            f"- 브랜치: `{result.branch_name}`",
             f"- PR: {result.pull_request_url}",
-            f"- verification: {format_verification_status(config, runtime_options)}",
-            f"- changed files: `{len(result.changed_files)}`",
-            f"- attachments: {format_attachment_summary(attachment_info)}",
-            f"- merge request: `{format_merge_request_status(merge_result)}`",
+            f"- 검증 명령: {format_verification_status(config, runtime_options)}",
+            f"- 변경 파일 수: `{len(result.changed_files)}`",
+            f"- 첨부 처리: {format_attachment_summary(attachment_info)}",
+            f"- 머지 요청 상태: `{format_merge_request_status(merge_result)}`",
             "",
-            "### Changed Files",
+            "### 변경 파일",
             format_changed_files(result.changed_files),
             "",
             format_run_url(),
@@ -188,17 +188,17 @@ def post_no_changes_comment(
     del config
     body = "\n".join(
         [
-            "## Execution Result",
+            "## 실행 결과",
             "",
-            "### Summary",
-            "- status: `no_changes`",
-            f"- action: `{command.action}`",
-            f"- mode: `{runtime_options.mode}`",
+            "### 요약",
+            "- 상태: `no_changes`",
+            f"- 액션: `{command.action}`",
+            f"- 모드: `{runtime_options.mode}`",
             f"- provider: `{runtime_options.provider}`",
-            f"- verify: `{'on' if runtime_options.verify else 'off'}`",
-            f"- branch: `{result.branch_name}`",
-            f"- attachments: {format_attachment_summary(attachment_info)}",
-            "- reason: no staged changes were produced",
+            f"- 검증: `{'실행' if runtime_options.verify else '생략'}`",
+            f"- 브랜치: `{result.branch_name}`",
+            f"- 첨부 처리: {format_attachment_summary(attachment_info)}",
+            "- 사유: 스테이징된 변경사항이 없어 PR을 만들지 않았습니다.",
             "",
             format_run_url(),
         ]
@@ -214,19 +214,19 @@ def post_failure_comment(
 ) -> None:
     body = "\n".join(
         [
-            "## Execution Result",
+            "## 실행 결과",
             "",
-            "### Summary",
-            "- status: `failed`",
-            f"- default mode: `{config.mode}`",
-            f"- failure stage: `{classify_failure_stage(error)}`",
-            f"- action: `{command.action if command else 'unknown'}`",
-            f"- error: `{type(error).__name__}: {error}`",
+            "### 요약",
+            "- 상태: `failed`",
+            f"- 기본 모드: `{config.mode}`",
+            f"- 실패 단계: `{classify_failure_stage(error)}`",
+            f"- 액션: `{command.action if command else 'unknown'}`",
+            f"- 오류: `{type(error).__name__}: {error}`",
             "",
-            "### Detail",
+            "### 상세",
             format_failure_detail(error),
             "",
-            "### Next Steps",
+            "### 다음 단계",
             format_failure_next_steps(request, config, command, error),
             "",
             format_run_url(),
@@ -237,12 +237,12 @@ def post_failure_comment(
 
 def format_changed_files(changed_files: list[str]) -> str:
     if not changed_files:
-        return "- none"
+        return "- 없음"
 
     displayed = changed_files[:20]
     lines = [f"- `{path}`" for path in displayed]
     if len(changed_files) > len(displayed):
-        lines.append(f"- and `{len(changed_files) - len(displayed)}` more")
+        lines.append(f"- 추가 `{len(changed_files) - len(displayed)}`개 더 있음")
     return "\n".join(lines)
 
 
@@ -263,31 +263,31 @@ def format_runtime_options(runtime_options: BotRuntimeOptions) -> str:
 
 def format_verification_status(config: BotConfig, runtime_options: BotRuntimeOptions) -> str:
     if not runtime_options.verify:
-        return "`skipped (verify=false)`"
+        return "`검증 생략`"
     return format_check_commands(config)
 
 
 def format_merge_request_status(merge_result: MergeRequestResult | None) -> str:
     if merge_result is None:
-        return "not requested"
+        return "요청 안 함"
     if merge_result.merged:
-        return f"merged ({merge_result.merge_sha})"
-    return "requested"
+        return f"머지 완료 ({merge_result.merge_sha})"
+    return "요청됨"
 
 
 def format_attachment_summary(context: AttachmentContext) -> str:
-    return f"`{len(context.attachments)}` loaded, `{len(context.skipped)}` skipped"
+    return f"`{len(context.attachments)}`개 로드, `{len(context.skipped)}`개 스킵"
 
 
 def format_secret_keys_for_log(secret_keys: list[str]) -> str:
     if not secret_keys:
-        return "`none`"
+        return "`없음`"
     return ", ".join(f"`{key}`" for key in secret_keys)
 
 
 def format_markdown_list(items: list[str], code: bool = False) -> str:
     if not items:
-        return "- none"
+        return "- 없음"
     if code:
         return "\n".join(f"- `{item}`" for item in items)
     return "\n".join(f"- {item}" for item in items)
@@ -296,13 +296,13 @@ def format_markdown_list(items: list[str], code: bool = False) -> str:
 def format_missing_status(snapshot: BotStatusSnapshot) -> str:
     lines: list[str] = []
     if snapshot.missing_context_paths:
-        lines.append("- missing context")
+        lines.append("- 누락된 컨텍스트")
         lines.extend(f"  - `{path}`" for path in snapshot.missing_context_paths)
     if snapshot.missing_secret_keys:
-        lines.append("- missing secret env")
+        lines.append("- 누락된 시크릿 env")
         lines.extend(f"  - `{key}`" for key in snapshot.missing_secret_keys)
     if not lines:
-        return "- none"
+        return "- 없음"
     return "\n".join(lines)
 
 
@@ -311,24 +311,24 @@ def format_failure_detail(error: Exception) -> str:
         output = truncate_text(error.output.strip(), 1800)
         return "\n".join(
             [
-                f"Verification command `{error.command}` output:",
+                f"검증 명령 `{error.command}` 출력:",
                 "",
                 "```text",
-                output or "(no output)",
+                output or "(출력 없음)",
                 "```",
             ]
         )
 
     if isinstance(error, MissingContextError):
-        return "\n".join(["Missing context:", "", "\n".join(f"- `{path}`" for path in error.missing_paths)])
+        return "\n".join(["누락된 컨텍스트:", "", "\n".join(f"- `{path}`" for path in error.missing_paths)])
 
     if isinstance(error, MissingSecretError):
-        return "\n".join(["Missing secret env:", "", "\n".join(f"- `{key}`" for key in error.missing_keys)])
+        return "\n".join(["누락된 시크릿 env:", "", "\n".join(f"- `{key}`" for key in error.missing_keys)])
 
     if isinstance(error, ValueError):
         return str(error)
 
-    return "Check the Actions log for the detailed failure output."
+    return "상세 오류는 Actions 로그를 확인하세요."
 
 
 def classify_failure_stage(error: Exception) -> str:
@@ -358,22 +358,22 @@ def format_failure_next_steps(
     error: Exception,
 ) -> str:
     del config
-    retry_text = request.comment_body.strip() or f"{BOT_MENTION} retry"
+    retry_text = request.comment_body.strip() or f"{BOT_MENTION} 다시 시도해줘"
     lines = [
-        f"- Retry with the same mention: `{retry_text}`",
-        f"- Ask for status: `{BOT_MENTION} status`",
+        f"- 같은 멘션으로 다시 요청: `{retry_text}`",
+        f"- 상태 확인: `{BOT_MENTION} status`",
     ]
 
     if isinstance(error, MissingContextError):
-        lines.append("- Add the missing documents to the repository or mounted context directory.")
+        lines.append("- 누락된 문서를 저장소 또는 외부 컨텍스트 경로에 추가하세요.")
     elif isinstance(error, MissingSecretError):
-        lines.append("- Add the missing secret env keys to the mounted secrets file or CI environment.")
+        lines.append("- 누락된 시크릿 env 키를 시크릿 파일 또는 CI 환경에 추가하세요.")
     elif isinstance(error, VerificationError):
-        lines.append("- Fix the failing verification output and ask the bot to run again.")
+        lines.append("- 검증 실패 출력을 먼저 수정한 뒤 다시 요청하세요.")
     elif isinstance(error, ValueError):
-        lines.append(f"- Ask `{BOT_MENTION} help` and retry with a clearer natural language request.")
+        lines.append(f"- `{BOT_MENTION} help`로 사용법을 확인한 뒤 더 명확하게 다시 요청하세요.")
     else:
-        lines.append("- Open the Actions log and retry after fixing the reported failure.")
+        lines.append("- Actions 로그를 확인하고 원인을 수정한 뒤 다시 요청하세요.")
 
     return "\n".join(lines)
 
@@ -384,20 +384,20 @@ def format_run_url() -> str:
     run_id = os.getenv("GITHUB_RUN_ID")
     if not repository or not run_id:
         return ""
-    return f"Actions log: {server_url}/{repository}/actions/runs/{run_id}"
+    return f"Actions 로그: {server_url}/{repository}/actions/runs/{run_id}"
 
 
 def trim_codex_output(output: str) -> str:
     text = output.strip()
     if not text:
-        return "(empty plan output)"
+        return "(빈 계획 출력)"
     return truncate_text(text, 4000)
 
 
 def truncate_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
-    return text[: limit - 20].rstrip() + "\n... (truncated)"
+    return text[: limit - 20].rstrip() + "\n... (생략됨)"
 
 
 def safe_create_issue_comment(request: IssueRequest, body: str) -> None:
@@ -407,9 +407,9 @@ def safe_create_issue_comment(request: IssueRequest, body: str) -> None:
     try:
         comment_url = create_issue_comment(request.repository, request.issue_number, body)
         if comment_url:
-            print(f"Issue comment created: {comment_url}")
+            print(f"이슈 댓글 생성됨: {comment_url}")
     except Exception as comment_error:
-        print(f"Failed to create issue comment: {comment_error}")
+        print(f"이슈 댓글 생성 실패: {comment_error}")
 
 
 def configure_output_encoding() -> None:
@@ -421,5 +421,5 @@ def configure_output_encoding() -> None:
 def format_check_commands(config: BotConfig) -> str:
     commands = get_check_commands(config)
     if not commands:
-        return "`none`"
+        return "`없음`"
     return ", ".join(f"`{command}`" for command in commands)

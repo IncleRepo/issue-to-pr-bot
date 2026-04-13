@@ -126,7 +126,7 @@ class GitHubPrTest(unittest.TestCase):
                 ["README.md"],
             )
 
-        self.assertIn("## Summary", body)
+        self.assertIn("## 요약", body)
         self.assertIn("Closes #8", body)
         self.assertIn("- `README.md`", body)
         self.assertIn(BOT_PR_MARKER, body)

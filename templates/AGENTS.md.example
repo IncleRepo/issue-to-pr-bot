@@ -2,18 +2,14 @@
 
 ## Working Rules
 
-- Keep changes focused on the issue that triggered the run.
-- Read `.issue-to-pr-bot.yml`, `CONTRIBUTING.md`, `README.md`, and templates before implementing.
+- Keep changes focused on the requested issue or review feedback.
+- Read `README.md` and `CONTRIBUTING.md` before changing code when they exist.
 - If required context is missing, stop instead of guessing.
-- Do not commit secrets, tokens, private keys, or local caches.
-
-## Automation Conventions
-
-- Branch format: `bot/{issue_number}{comment_suffix}-{slug}`
-- Commit format: `feat(issue-{issue_number}): {issue_title}`
-- PR title format: `[bot] #{issue_number} {issue_title}`
+- Do not commit secrets, tokens, private keys, local caches, or generated files.
 
 ## Verification
+
+Use lightweight checks first. Add stricter checks only when the repository actually needs them.
 
 ```powershell
 python -m compileall -q app tests
@@ -28,10 +24,8 @@ python -m unittest discover -s tests
 - `*.pem`
 - `*.key`
 
-## Required Context
+## Notes
 
-- `README.md`
-
-## Required Secrets
-
-- `DB_URL`
+- Do not add `Required Secrets` unless the repository really needs them.
+- Do not add `Required Context` unless the bot must stop without those files.
+- Start simple and tighten the rules only after the repository workflow is stable.

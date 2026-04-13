@@ -37,7 +37,7 @@ class MainTest(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 snapshot = collect_status_snapshot(workspace, BotConfig())
 
-        self.assertEqual(format_missing_status(snapshot), "- none")
+        self.assertEqual(format_missing_status(snapshot), "- 없음")
 
     def test_classify_failure_stage_marks_verification_failures(self) -> None:
         error = VerificationError("python -m unittest", "bad", 1)

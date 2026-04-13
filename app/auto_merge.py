@@ -15,7 +15,7 @@ def handle_pull_request_review_event(payload: dict) -> None:
         return
 
     if review_state != "approved":
-        print(f"review state가 approved가 아니어서 auto-merge를 건너뜁니다: {review_state}")
+        print(f"review state가 approved가 아니라서 auto-merge를 건너뜁니다: {review_state}")
         return
 
     token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
@@ -32,7 +32,7 @@ def handle_pull_request_review_event(payload: dict) -> None:
             "",
             "- 상태: `merged`",
             f"- PR: #{pull_request_number}",
-            f"- merge commit: `{merge_sha}`",
+            f"- 머지 커밋: `{merge_sha}`",
         ]
     )
     create_issue_comment(repository, int(pull_request_number), body, token=token)
