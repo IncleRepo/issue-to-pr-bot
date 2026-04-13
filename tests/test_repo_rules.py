@@ -75,6 +75,54 @@ class RepoRulesTest(unittest.TestCase):
 
         self.assertEqual(resolved, BotConfig())
 
+    def test_resolve_bot_config_infers_protected_paths_from_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath("README.md").write_text(
+                "\n".join(
+                    [
+                        "# Repo",
+                        "",
+                        "## Safety",
+                        "",
+                        "Protected paths:",
+                        "- `.github/workflows/**`",
+                        "- `.env`",
+                        "- `secrets/**`",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_bot_config(workspace, BotConfig(protected_paths=["*.pem"]))
+
+        self.assertEqual(
+            resolved.protected_paths,
+            ["*.pem", ".github/workflows/**", ".env", "secrets/**"],
+        )
+
+    def test_resolve_bot_config_infers_protected_paths_from_safety_sentences(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath("AGENTS.md").write_text(
+                "\n".join(
+                    [
+                        "# Guide",
+                        "",
+                        "Do not modify `.github/workflows/**` unless the issue asks for it.",
+                        "Never commit `.env`, `.venv/`, or `*.pem`.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_bot_config(workspace, BotConfig(protected_paths=[]))
+
+        self.assertEqual(
+            resolved.protected_paths,
+            [".github/workflows/**", ".env", ".venv/", "*.pem"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

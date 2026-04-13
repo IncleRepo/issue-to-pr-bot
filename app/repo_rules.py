@@ -35,6 +35,15 @@ EXPLICIT_PR_TITLE_PATTERN = re.compile(
     r"(?:pr|pull request)(?: title)?(?: format| pattern| template)?\s*[:=-]\s*`([^`]+)`",
     re.IGNORECASE,
 )
+PROTECTED_PATHS_HEADER_PATTERN = re.compile(
+    r"^(protected paths?|protected files?|do not modify|forbidden paths?|safety|보호 경로|수정 금지)",
+    re.IGNORECASE,
+)
+PROTECTED_PATH_LINE_PATTERN = re.compile(
+    r"(do not modify|never commit|protected|forbidden|수정 금지|커밋 금지|보호)\b",
+    re.IGNORECASE,
+)
+BACKTICK_PATTERN = re.compile(r"`([^`]+)`")
 
 
 def resolve_bot_config(workspace: Path, config: BotConfig) -> BotConfig:
@@ -61,6 +70,10 @@ def resolve_bot_config(workspace: Path, config: BotConfig) -> BotConfig:
     inferred_checks = infer_verification_commands(documents)
     if inferred_checks:
         replacements["check_commands"] = inferred_checks
+
+    inferred_protected_paths = infer_protected_paths(documents)
+    if inferred_protected_paths:
+        replacements["protected_paths"] = merge_unique(config.protected_paths, inferred_protected_paths)
 
     if not replacements:
         return config
@@ -126,9 +139,34 @@ def infer_verification_commands(documents: dict[str, str]) -> list[str]:
     return commands
 
 
+def infer_protected_paths(documents: dict[str, str]) -> list[str]:
+    paths: list[str] = []
+    for text in documents.values():
+        for path in infer_yaml_list(text, "protected_paths"):
+            if is_path_pattern(path) and path not in paths:
+                paths.append(path)
+
+        for section in extract_markdown_sections(text):
+            heading = section["heading"].strip()
+            if PROTECTED_PATHS_HEADER_PATTERN.search(heading):
+                for path in infer_paths_from_text(section["body"]):
+                    if path not in paths:
+                        paths.append(path)
+
+        for path in infer_paths_from_lines(text):
+            if path not in paths:
+                paths.append(path)
+
+    return paths
+
+
 def infer_yaml_check_commands(text: str) -> list[str]:
+    return infer_yaml_list(text, "check_commands")
+
+
+def infer_yaml_list(text: str, key: str) -> list[str]:
     lines = text.splitlines()
-    commands: list[str] = []
+    values: list[str] = []
     collecting = False
     base_indent = 0
 
@@ -138,7 +176,7 @@ def infer_yaml_check_commands(text: str) -> list[str]:
         if not stripped:
             continue
 
-        if stripped.startswith("check_commands:"):
+        if stripped.startswith(f"{key}:"):
             collecting = True
             base_indent = len(line) - len(line.lstrip())
             continue
@@ -150,11 +188,11 @@ def infer_yaml_check_commands(text: str) -> list[str]:
                 continue
 
             if stripped.startswith("- "):
-                command = stripped[2:].strip().strip('"').strip("'")
-                if command:
-                    commands.append(command)
+                value = stripped[2:].strip().strip('"').strip("'")
+                if value:
+                    values.append(value)
 
-    return commands
+    return values
 
 
 def extract_markdown_sections(text: str) -> list[dict[str, str]]:
@@ -176,3 +214,52 @@ def extract_commands_from_code_block(block: str) -> list[str]:
         if COMMAND_PATTERN.match(stripped):
             commands.append(stripped)
     return commands
+
+
+def infer_paths_from_text(text: str) -> list[str]:
+    paths: list[str] = []
+    for path in infer_paths_from_lines(text):
+        if path not in paths:
+            paths.append(path)
+    return paths
+
+
+def infer_paths_from_lines(text: str) -> list[str]:
+    paths: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not PROTECTED_PATH_LINE_PATTERN.search(line) and not line.startswith("- "):
+            continue
+        for candidate in BACKTICK_PATTERN.findall(line):
+            candidate = candidate.strip().strip("`")
+            if is_path_pattern(candidate) and candidate not in paths:
+                paths.append(candidate)
+        if line.startswith("- "):
+            candidate = line[2:].strip().strip('"').strip("'").strip("`")
+            if is_path_pattern(candidate) and candidate not in paths:
+                paths.append(candidate)
+    return paths
+
+
+def is_path_pattern(value: str) -> bool:
+    if not value or " " in value:
+        return False
+    if any(token in value for token in ("{issue_", "{slug", "{branch_", "{{")):
+        return False
+    return (
+        value.startswith(".")
+        or value.startswith("*")
+        or "/" in value
+        or "\\" in value
+        or value.endswith((".env", ".pem", ".key", ".p12", ".pfx"))
+    )
+
+
+def merge_unique(base_values: list[str], extra_values: list[str]) -> list[str]:
+    merged: list[str] = []
+    for value in [*base_values, *extra_values]:
+        if value not in merged:
+            merged.append(value)
+    return merged

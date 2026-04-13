@@ -34,6 +34,18 @@ The bot reads this document and applies these patterns automatically when they a
 - Commit format: `feat(issue-{issue_number}): {issue_title}`
 - PR title format: `[bot] #{issue_number} {issue_title}`
 
+## Protected Paths
+
+The bot also reads protected path rules from documentation.
+
+- `.github/workflows/**`
+- `.env`
+- `.env.*`
+- `*.pem`
+- `*.key`
+- `*.p12`
+- `*.pfx`
+
 ## Safety
 
 - Never commit `.venv/`, `.ruff_cache/`, `__pycache__/`, `.env`, private keys, or tokens.
