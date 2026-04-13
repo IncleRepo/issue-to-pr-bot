@@ -8,6 +8,7 @@ from app.bot import (
     build_pull_request_title,
     build_test_commit_message,
     parse_bot_command,
+    resolve_runtime_options,
     should_run_bot,
     should_run_for_mention,
 )
@@ -31,7 +32,7 @@ class BotTest(unittest.TestCase):
         self.assertFalse(should_run_for_mention("@someone-else run", config))
 
     def test_parse_bot_command_supports_run_plan_help_and_status(self) -> None:
-        run_command = parse_bot_command("/bot run effort=high", BotConfig())
+        run_command = parse_bot_command("/bot run effort=high verify=false", BotConfig())
         plan_command = parse_bot_command("/bot plan README 수정 계획", BotConfig())
         help_command = parse_bot_command("/bot help", BotConfig())
         status_command = parse_bot_command("/bot status", BotConfig())
@@ -47,6 +48,7 @@ class BotTest(unittest.TestCase):
 
         self.assertEqual(run_command.action, "run")
         self.assertEqual(run_command.options["effort"], "high")
+        self.assertEqual(run_command.options["verify"], "false")
         self.assertEqual(plan_command.action, "plan")
         self.assertEqual(plan_command.instruction, "README 수정 계획")
         self.assertEqual(help_command.action, "help")
@@ -158,6 +160,27 @@ class BotTest(unittest.TestCase):
             "feat(issue-15): Add GitHub PR flow!",
         )
         self.assertEqual(build_test_commit_message(request, config), "chore(issue-15): marker")
+
+    def test_resolve_runtime_options_supports_mode_provider_verify_and_effort(self) -> None:
+        command = parse_bot_command(
+            "/bot run mode=codex provider=codex verify=false effort=high README 수정",
+            BotConfig(mode="test-pr"),
+        )
+
+        assert command is not None
+        options = resolve_runtime_options(command, BotConfig(mode="test-pr"))
+
+        self.assertEqual(options.mode, "codex")
+        self.assertEqual(options.provider, "codex")
+        self.assertFalse(options.verify)
+        self.assertEqual(options.effort, "high")
+
+    def test_resolve_runtime_options_rejects_unsupported_provider(self) -> None:
+        command = parse_bot_command("/bot run provider=claude", BotConfig())
+
+        assert command is not None
+        with self.assertRaises(ValueError):
+            resolve_runtime_options(command, BotConfig())
 
 
 if __name__ == "__main__":

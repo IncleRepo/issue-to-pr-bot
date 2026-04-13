@@ -98,6 +98,13 @@ bot:
 - `@incle-issue-to-pr-bot plan ...`
 - `@incle-issue-to-pr-bot status`
 
+댓글 옵션:
+
+- `mode=codex|test-pr`
+- `provider=codex`
+- `verify=true|false`
+- `effort=low|medium|high|xhigh`
+
 네이밍 템플릿에서 사용할 수 있는 주요 placeholder:
 
 - `{issue_number}`
@@ -146,9 +153,10 @@ bot:
 
 이슈 본문과 댓글에 포함된 링크를 최대 일부까지 수집합니다.
 
-- 텍스트 첨부(`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.csv` 등)는 내용 일부를 프롬프트에 포함
-- 이미지와 PDF는 파일 경로와 종류만 프롬프트에 포함
-- 지원하지 않는 형식이나 너무 큰 파일은 건너뜀
+- 텍스트 첨부(`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.csv`, `.sql`, `.toml`, `.ini`, `.cfg`, `.html` 등)는 내용 일부와 요약을 프롬프트에 포함
+- HTML 링크는 본문 텍스트를 추출해서 컨텍스트로 사용
+- 이미지와 PDF는 파일 경로와 종류를 프롬프트에 포함
+- 다운로드 실패나 지원하지 않는 형식은 스킵 이유와 함께 기록
 
 ## 📌 향후 확장 계획
 

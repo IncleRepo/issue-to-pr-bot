@@ -6,6 +6,7 @@ from pathlib import Path
 from app.attachments import collect_attachment_context, format_attachment_context
 from app.bot import (
     BotCommand,
+    BotRuntimeOptions,
     IssueRequest,
     build_codex_commit_message,
     build_plan_prompt,
@@ -31,11 +32,14 @@ def create_codex_pr(
     workspace: Path,
     config: BotConfig,
     command: BotCommand | None = None,
+    runtime_options: BotRuntimeOptions | None = None,
 ) -> PullRequestResult:
+    runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=True)
     branch_name = checkout_bot_branch(request, workspace, config)
 
-    run_codex(request, workspace, config, command)
-    run_verification(config, workspace)
+    run_codex(request, workspace, config, command, runtime_options)
+    if runtime_options.verify:
+        run_verification(config, workspace)
 
     return commit_push_and_open_pr(
         request=request,
@@ -51,7 +55,9 @@ def run_codex(
     workspace: Path,
     config: BotConfig,
     bot_command: BotCommand | None = None,
+    runtime_options: BotRuntimeOptions | None = None,
 ) -> CodexRunResult:
+    runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=True)
     available_secret_keys = load_runtime_secrets(config)
     attachment_context = format_attachment_context(collect_attachment_context(request))
     documents = collect_context_documents(workspace, config)
@@ -65,7 +71,7 @@ def run_codex(
         available_secret_keys,
         attachment_context,
     )
-    command = build_codex_command(workspace, effort=get_effort(bot_command))
+    command = build_codex_command(workspace, effort=get_effort(bot_command, runtime_options))
 
     print(f"저장소 규칙 문서 {len(documents)}개를 프롬프트에 포함합니다.")
     print("Codex 실행 시작")
@@ -94,7 +100,9 @@ def run_codex_plan(
     workspace: Path,
     config: BotConfig,
     bot_command: BotCommand | None = None,
+    runtime_options: BotRuntimeOptions | None = None,
 ) -> CodexRunResult:
+    runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=False)
     available_secret_keys = load_runtime_secrets(config)
     attachment_context = format_attachment_context(collect_attachment_context(request))
     documents = collect_context_documents(workspace, config)
@@ -111,7 +119,7 @@ def run_codex_plan(
     output_path = Path(tempfile.gettempdir()) / "issue-to-pr-bot-codex-plan.txt"
     command = build_codex_command(
         workspace,
-        effort=get_effort(bot_command),
+        effort=get_effort(bot_command, runtime_options),
         output_last_message=output_path,
     )
 
@@ -138,11 +146,17 @@ def run_codex_plan(
     return CodexRunResult(output=output)
 
 
-def get_effort(bot_command: BotCommand | None) -> str | None:
-    if not bot_command:
+def get_effort(
+    bot_command: BotCommand | None,
+    runtime_options: BotRuntimeOptions | None = None,
+) -> str | None:
+    if runtime_options and runtime_options.effort:
+        effort = runtime_options.effort
+    elif bot_command:
+        effort = bot_command.options.get("effort")
+    else:
         return None
 
-    effort = bot_command.options.get("effort")
     if not effort:
         return None
 

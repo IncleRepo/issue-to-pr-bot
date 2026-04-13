@@ -1,4 +1,5 @@
 import re
+import shlex
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -22,6 +23,14 @@ class BotCommand:
     trigger: str
     instruction: str
     options: dict[str, str]
+
+
+@dataclass(frozen=True)
+class BotRuntimeOptions:
+    mode: str
+    provider: str
+    verify: bool
+    effort: str | None = None
 
 
 def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
@@ -95,7 +104,12 @@ def find_mention(comment_body: str, config: BotConfig) -> re.Match[str] | None:
 
 def parse_options(instruction: str) -> dict[str, str]:
     options: dict[str, str] = {}
-    for token in instruction.split():
+    try:
+        tokens = shlex.split(instruction)
+    except ValueError:
+        tokens = instruction.split()
+
+    for token in tokens:
         if "=" not in token:
             continue
         key, value = token.split("=", 1)
@@ -104,6 +118,49 @@ def parse_options(instruction: str) -> dict[str, str]:
         if key and value:
             options[key] = value
     return options
+
+
+def resolve_runtime_options(command: BotCommand, config: BotConfig) -> BotRuntimeOptions:
+    configured_mode = "codex" if command.action == "plan" else config.mode.strip().lower()
+    mode = command.options.get("mode", configured_mode).strip().lower()
+    if mode not in {"codex", "test-pr"}:
+        raise ValueError(f"지원하지 않는 mode 값입니다: {mode}")
+    if command.action == "plan" and mode != "codex":
+        raise ValueError("plan 명령은 mode=codex 에서만 지원됩니다.")
+
+    default_provider = "codex" if mode == "codex" else "builtin"
+    provider = command.options.get("provider", default_provider).strip().lower()
+    if provider not in {"codex", "builtin"}:
+        raise ValueError(f"지원하지 않는 provider 값입니다: {provider}")
+    if mode != "codex" and "provider" in command.options:
+        raise ValueError("provider 옵션은 mode=codex 일 때만 사용할 수 있습니다.")
+
+    verify = parse_bool_option(command.options.get("verify"), default=True)
+    if command.action == "plan":
+        verify = False
+
+    effort = command.options.get("effort")
+    if effort and mode != "codex":
+        raise ValueError("effort 옵션은 mode=codex 일 때만 사용할 수 있습니다.")
+
+    return BotRuntimeOptions(
+        mode=mode,
+        provider=provider,
+        verify=verify,
+        effort=effort.lower() if effort else None,
+    )
+
+
+def parse_bool_option(raw_value: str | None, default: bool) -> bool:
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"불리언 옵션 값이 잘못되었습니다: {raw_value}")
 
 
 def build_issue_request(payload: dict) -> IssueRequest:

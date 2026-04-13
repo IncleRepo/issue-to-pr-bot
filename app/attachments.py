@@ -1,3 +1,4 @@
+import html
 import re
 import tempfile
 import urllib.parse
@@ -12,12 +13,30 @@ MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_BYTES = 3_000_000
 MAX_TEXT_ATTACHMENT_CHARS = 6_000
 
-TEXT_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".log", ".xml"}
+TEXT_EXTENSIONS = {
+    ".cfg",
+    ".csv",
+    ".env",
+    ".htm",
+    ".html",
+    ".ini",
+    ".json",
+    ".log",
+    ".md",
+    ".py",
+    ".sql",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 TEXT_CONTENT_TYPES = {
     "application/json",
     "application/xml",
     "text/csv",
+    "text/html",
     "text/markdown",
     "text/plain",
     "text/xml",
@@ -25,6 +44,10 @@ TEXT_CONTENT_TYPES = {
 
 MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\((https?://[^)\s]+)\)")
 PLAIN_URL_PATTERN = re.compile(r"https?://[^\s<>()\[\]]+")
+HTML_TITLE_PATTERN = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+HTML_SCRIPT_STYLE_PATTERN = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 @dataclass(frozen=True)
@@ -35,34 +58,41 @@ class AttachmentInfo:
     local_path: str
     kind: str
     content: str = ""
+    summary: str = ""
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class AttachmentSkip:
+    url: str
+    reason: str
 
 
 @dataclass(frozen=True)
 class AttachmentContext:
     attachments: list[AttachmentInfo]
-    skipped_urls: list[str]
+    skipped: list[AttachmentSkip]
 
 
 def collect_attachment_context(request: IssueRequest) -> AttachmentContext:
     attachment_dir = prepare_attachment_dir(request)
     attachments: list[AttachmentInfo] = []
-    skipped_urls: list[str] = []
+    skipped: list[AttachmentSkip] = []
 
     for source, text in (("issue", request.issue_body), ("comment", request.comment_body)):
         for url in extract_attachment_urls(text):
             if any(existing.url == url for existing in attachments):
                 continue
             if len(attachments) >= MAX_ATTACHMENTS:
-                skipped_urls.append(url)
+                skipped.append(AttachmentSkip(url=url, reason="attachment limit exceeded"))
                 continue
 
             try:
                 attachments.append(download_attachment(source, url, attachment_dir))
-            except Exception:
-                skipped_urls.append(url)
+            except Exception as error:
+                skipped.append(AttachmentSkip(url=url, reason=str(error)))
 
-    return AttachmentContext(attachments=attachments, skipped_urls=skipped_urls)
+    return AttachmentContext(attachments=attachments, skipped=skipped)
 
 
 def extract_attachment_urls(text: str) -> list[str]:
@@ -99,13 +129,11 @@ def download_attachment(source: str, url: str, attachment_dir: Path) -> Attachme
 
     kind = classify_attachment(filename, content_type)
     if kind == "unsupported":
-        raise RuntimeError(f"Unsupported attachment type: {content_type}")
+        raise RuntimeError(f"unsupported attachment type: {content_type}")
 
     local_path = attachment_dir / filename
     local_path.write_bytes(data)
-    content = ""
-    if kind == "text":
-        content = data.decode("utf-8", errors="replace")[:MAX_TEXT_ATTACHMENT_CHARS]
+    content, summary = extract_attachment_content(kind, data)
 
     return AttachmentInfo(
         source=source,
@@ -114,6 +142,7 @@ def download_attachment(source: str, url: str, attachment_dir: Path) -> Attachme
         local_path=str(local_path),
         kind=kind,
         content=content,
+        summary=summary,
     )
 
 
@@ -148,13 +177,15 @@ def read_limited(response) -> bytes:
             break
         total += len(chunk)
         if total > MAX_ATTACHMENT_BYTES:
-            raise RuntimeError("Attachment exceeded maximum allowed size.")
+            raise RuntimeError("attachment exceeded maximum allowed size")
         chunks.append(chunk)
     return b"".join(chunks)
 
 
 def classify_attachment(filename: str, content_type: str) -> str:
     extension = Path(filename).suffix.lower()
+    if content_type == "text/html" or extension in {".html", ".htm"}:
+        return "web"
     if content_type.startswith("text/") or content_type in TEXT_CONTENT_TYPES or extension in TEXT_EXTENSIONS:
         return "text"
     if content_type.startswith("image/") or extension in IMAGE_EXTENSIONS:
@@ -164,8 +195,40 @@ def classify_attachment(filename: str, content_type: str) -> str:
     return "unsupported"
 
 
+def extract_attachment_content(kind: str, data: bytes) -> tuple[str, str]:
+    if kind == "text":
+        content = data.decode("utf-8", errors="replace")[:MAX_TEXT_ATTACHMENT_CHARS]
+        return content, summarize_text(content)
+    if kind == "web":
+        text = extract_html_text(data.decode("utf-8", errors="replace"))
+        content = text[:MAX_TEXT_ATTACHMENT_CHARS]
+        return content, summarize_text(content)
+    return "", ""
+
+
+def extract_html_text(raw_html: str) -> str:
+    title_match = HTML_TITLE_PATTERN.search(raw_html)
+    title = html.unescape(title_match.group(1)).strip() if title_match else ""
+
+    without_scripts = HTML_SCRIPT_STYLE_PATTERN.sub(" ", raw_html)
+    text = HTML_TAG_PATTERN.sub(" ", without_scripts)
+    text = html.unescape(text)
+    text = WHITESPACE_PATTERN.sub(" ", text).strip()
+    if title and not text.startswith(title):
+        text = f"{title}\n\n{text}"
+    return text
+
+
+def summarize_text(content: str) -> str:
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    if not lines:
+        return "(empty)"
+    summary = " ".join(lines[:3])
+    return summary[:220]
+
+
 def format_attachment_context(context: AttachmentContext) -> str:
-    if not context.attachments and not context.skipped_urls:
+    if not context.attachments and not context.skipped:
         return "No supported issue or comment attachments were collected."
 
     sections = ["Issue and comment attachments:"]
@@ -178,7 +241,9 @@ def format_attachment_context(context: AttachmentContext) -> str:
                 f"  - source url: {attachment.url}",
             ]
         )
-        if attachment.kind == "text":
+        if attachment.summary:
+            sections.append(f"  - summary: {attachment.summary}")
+        if attachment.kind in {"text", "web"}:
             sections.extend(
                 [
                     "  - content:",
@@ -188,13 +253,9 @@ def format_attachment_context(context: AttachmentContext) -> str:
                 ]
             )
 
-    if context.skipped_urls:
-        sections.extend(
-            [
-                "",
-                "Skipped attachment URLs:",
-                *[f"- {url}" for url in context.skipped_urls],
-            ]
-        )
+    if context.skipped:
+        sections.extend(["", "Skipped attachment URLs:"])
+        for skipped in context.skipped:
+            sections.append(f"- {skipped.url} ({skipped.reason})")
 
     return "\n".join(sections)

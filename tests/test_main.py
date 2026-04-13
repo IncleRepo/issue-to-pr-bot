@@ -4,8 +4,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.bot import BotCommand, IssueRequest
 from app.config import BotConfig
-from app.main import collect_status_snapshot, format_missing_status
+from app.main import (
+    classify_failure_stage,
+    collect_status_snapshot,
+    format_failure_next_steps,
+    format_missing_status,
+)
+from app.verification import VerificationError
 
 
 class MainTest(unittest.TestCase):
@@ -30,6 +37,32 @@ class MainTest(unittest.TestCase):
                 snapshot = collect_status_snapshot(workspace, BotConfig())
 
         self.assertEqual(format_missing_status(snapshot), "- 없음")
+
+    def test_classify_failure_stage_marks_verification_failures(self) -> None:
+        error = VerificationError("python -m unittest", "bad", 1)
+        self.assertEqual(classify_failure_stage(error), "verification")
+
+    def test_format_failure_next_steps_includes_retry_command(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=1,
+            issue_title="Failing issue",
+            issue_body="",
+            comment_body="/bot run effort=high",
+            comment_author="IncleRepo",
+            comment_id=1,
+        )
+        command = BotCommand("run", "/bot run", "effort=high", {"effort": "high"})
+
+        message = format_failure_next_steps(
+            request,
+            BotConfig(),
+            command,
+            VerificationError("python -m unittest", "bad", 1),
+        )
+
+        self.assertIn("/bot run effort=high", message)
+        self.assertIn("/bot status", message)
 
 
 if __name__ == "__main__":

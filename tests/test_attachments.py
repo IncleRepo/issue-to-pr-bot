@@ -45,6 +45,53 @@ class AttachmentsTest(unittest.TestCase):
         self.assertIn("# Guide", context.attachments[0].content)
         self.assertIn("guide.md", formatted)
         self.assertIn("saved at:", formatted)
+        self.assertEqual(context.skipped, [])
+
+    def test_collect_attachment_context_extracts_html_page_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            root.joinpath("spec.html").write_text(
+                "<html><head><title>API Spec</title></head><body><h1>Auth</h1><p>Use bearer token.</p></body></html>",
+                encoding="utf-8",
+            )
+            server, base_url = start_static_server(root)
+            try:
+                request = IssueRequest(
+                    repository="IncleRepo/issue-to-pr-bot",
+                    issue_number=11,
+                    issue_title="HTML attachment",
+                    issue_body=f"{base_url}/spec.html",
+                    comment_body="",
+                    comment_author="IncleRepo",
+                    comment_id=56,
+                )
+
+                context = collect_attachment_context(request)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(context.attachments[0].kind, "web")
+        self.assertIn("API Spec", context.attachments[0].content)
+        self.assertIn("Use bearer token.", context.attachments[0].content)
+
+    def test_collect_attachment_context_records_skip_reasons(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=12,
+            issue_title="Bad attachment",
+            issue_body="https://127.0.0.1:1/not-found.txt",
+            comment_body="",
+            comment_author="IncleRepo",
+            comment_id=57,
+        )
+
+        context = collect_attachment_context(request)
+
+        self.assertEqual(context.attachments, [])
+        self.assertEqual(len(context.skipped), 1)
+        self.assertIn("127.0.0.1:1", context.skipped[0].url)
+        self.assertTrue(context.skipped[0].reason)
 
 
 def start_static_server(root: Path) -> tuple[http.server.ThreadingHTTPServer, str]:
