@@ -1,170 +1,220 @@
 # issue-to-pr-bot
 
-GitHub 이슈, PR 댓글, 리뷰 코멘트에서 App 멘션을 받아 self-hosted runner 환경의 Codex로 코드 수정, 검증, PR 생성, PR 수정, merge 요청까지 연결하는 자동화 봇 엔진입니다.
+GitHub 이슈나 PR에서 App을 멘션하면, self-hosted runner 위에서 Codex가 작업을 수행하고 PR까지 만들어주는 중앙 엔진 저장소입니다.
 
-이 저장소는 "봇 엔진"입니다. 실제 사용자는 자기 저장소에 workflow를 넣고, 자기 GitHub App과 자기 self-hosted runner를 연결해서 사용합니다.
+이 저장소의 핵심 목표는 두 가지입니다.
 
-## 1. 프로젝트 개요
+- 여러 대상 저장소에서 같은 봇 엔진을 재사용하기
+- GitHub Actions를 유지한 채 설정과 운영을 최대한 중앙화하기
 
-### 이 프로젝트가 하는 일
+즉, 대상 저장소마다 봇 코드를 복사하는 방식이 아니라 중앙 엔진 저장소 하나를 두고 얇은 workflow만 연결해서 사용하는 구조를 지향합니다.
 
-사람이 GitHub에서 자연어로 요청하면 봇이 아래 순서로 작업합니다.
+## 이 저장소를 한 줄로 이해하기
 
-1. 댓글의 App 멘션과 자연어 요청을 읽습니다.
-2. 저장소 문서와 구조를 읽고 규칙을 추론합니다.
-3. Codex가 코드를 수정하거나 계획을 만듭니다.
-4. 검증을 돌립니다.
-5. 브랜치를 push하고 PR을 만들거나 기존 PR을 다시 갱신합니다.
-6. 결과를 GitHub 댓글로 남깁니다.
+흐름은 아래처럼 보면 가장 쉽습니다.
 
-### 지원 입력
+1. 대상 저장소에서 GitHub 이벤트가 발생합니다.
+2. 대상 저장소의 얇은 workflow가 중앙 `engine repo`의 reusable workflow를 호출합니다.
+3. self-hosted runner가 작업을 받습니다.
+4. Docker 컨테이너 안에서 봇 엔진이 실행됩니다.
+5. Codex가 변경을 만들고 검증한 뒤 PR을 생성합니다.
 
-- 이슈 댓글
-- PR 일반 댓글
-- PR 리뷰 코멘트
-- PR 리뷰 본문
+역할은 이렇게 나뉩니다.
 
-### 지원 결과
+- `self-hosted runner`
+  - 실제 GitHub Actions 작업이 돌아가는 머신입니다.
+- `Docker`
+  - 봇이 항상 같은 환경에서 실행되도록 고정하는 작업실입니다.
+- `Codex`
+  - 코드 수정과 계획 생성을 담당하는 CLI 도구입니다.
+- `engine repo`
+  - 지금 보고 있는 이 저장소입니다. 봇 코드와 reusable workflow가 여기에 있습니다.
+- `target repo`
+  - 실제로 봇이 작업할 대상 저장소입니다.
 
-- 새 브랜치 생성
-- 코드 수정
-- 검증 실행
-- PR 생성
-- 기존 PR 재수정
-- 승인 후 merge 요청 처리
-- 실패 사유 댓글 보고
+## 중앙화는 어디까지 가능한가
 
-### 프로젝트 구조
+GitHub Actions를 유지하는 한도에서 현실적으로 가능한 최대치는 아래에 가깝습니다.
 
-```text
-app/
-  domain/
-    models.py              # 공용 데이터 모델
-  automation/
-    parsing.py             # 자연어 멘션 해석
-    templates.py           # 브랜치명, 커밋, 프롬프트 템플릿
-  runtime/
-    orchestrator.py        # 전체 실행 흐름
-    comments.py            # GitHub 댓글 보고
-  attachments.py           # 첨부 링크 수집
-  auto_merge.py            # 승인 후 merge 처리
-  codex_provider.py        # Codex CLI 실행
-  codex_runner.py          # Codex 실행과 PR 생성 연결
-  config.py                # 최소 설정과 기본값
-  github_pr.py             # git / GitHub API 처리
-  install_manager.py       # 대상 저장소 초기 설치 매니저
-  llm_provider.py          # LLM provider 추상화
-  prompting.py             # prompt budget, context 선별, 계측
-  repo_context.py          # 저장소 문서/구조 수집
-  repo_rules.py            # 문서 기반 규칙 추론
-  runtime_secrets.py       # secret env 로딩
-  verification.py          # 검증 명령 실행
-  bot.py                   # 호환용 facade
-  main.py                  # 실행 진입점 facade
-templates/
-tests/
-```
+- 중앙 `engine repo` 1개
+- 중앙 `reusable workflow` 1개
+- 중앙 `self-hosted runner` 또는 `runner group`
+- 중앙 `GitHub App`
+- 중앙 `organization-level variables / secrets` 또는 저장소별 자동 설정
+- 대상 저장소에는 얇은 caller workflow만 유지
 
-## 1-1. 중앙화된 최종 운영 구조
+중요한 한계도 있습니다.
 
-이 프로젝트는 GitHub Actions를 유지하는 한도에서 꽤 강하게 중앙화할 수 있습니다.
+- GitHub Actions를 쓰는 한, 대상 저장소에 workflow 파일이 완전히 0개가 되지는 않습니다.
+- GitHub App 생성, runner 등록, Codex 로그인 같은 인증 단계는 완전 무인 자동화가 어렵습니다.
 
-권장 최종 구조:
+그래도 대부분의 설치와 설정은 중앙화 매니저로 많이 줄일 수 있습니다.
 
-- 중앙 `engine repo`: 이 저장소 하나에 봇 코드, Dockerfile, reusable workflow 유지
-- 중앙 `self-hosted runner` 또는 `runner group`: 여러 저장소가 같은 실행 머신 공유
-- 중앙 `GitHub App`: 권한, App ID, private key 관리
-- 중앙 `organization variables / secrets`: 공통 설정 중앙 관리
-- 대상 저장소: 얇은 workflow caller와 선택 설정만 보유
+## 이 저장소가 다른 저장소에서 바로 동작하는 이유
 
-대상 저장소에 남는 최소 파일:
+대상 저장소에 Python 앱 코드를 복사하지 않아도 되는 이유는, workflow 실행 시점에 중앙 엔진 저장소를 별도로 checkout해서 쓰기 때문입니다.
+
+즉 대상 저장소에는 보통 아래 정도만 있으면 됩니다.
 
 - `.github/workflows/issue-comment.yml`
 - 선택: `.github/workflows/pull-request-review.yml`
 - 선택: `.github/workflows/pull-request-review-comment.yml`
 - 선택: `.issue-to-pr-bot.yml`
 
-즉 대상 저장소에는 봇 엔진 Python 파일을 둘 필요가 없습니다. workflow가 실행될 때 중앙 `engine repo`를 checkout해서 그 코드를 사용합니다.
+## 빠른 시작
 
-## 1-2. 설치 매니저 MVP
+처음 붙이는 순서는 아래가 가장 단순합니다.
 
-이 저장소에는 대상 저장소에 최소 환경을 빠르게 넣기 위한 설치 매니저가 들어 있습니다.
+1. GitHub App을 만든다.
+2. self-hosted runner, Docker, Codex 로그인을 준비한다.
+3. 중앙화 매니저로 대상 저장소에 workflow를 설치한다.
+4. 필요하면 GitHub 변수/시크릿도 매니저로 설정한다.
+5. 대상 저장소 이슈나 PR에서 봇을 멘션한다.
 
-실행 예시:
+## 중앙화 매니저 CLI
+
+이제 이 저장소는 패키지형 CLI로도 사용할 수 있습니다.
+
+설치 방법 예시:
 
 ```powershell
-python -m app.install_manager init --target C:\path\to\target-repo --write-config
+python -m pip install .
 ```
 
-리뷰 관련 workflow까지 포함해 중앙 엔진 저장소를 지정하고 싶다면:
+원격 저장소에서 바로 설치하고 싶다면:
 
 ```powershell
-python -m app.install_manager init `
+python -m pip install git+https://github.com/IncleRepo/issue-to-pr-bot.git
+```
+
+설치 후 사용할 명령은 아래입니다.
+
+```powershell
+issue-to-pr-bot-manager --help
+```
+
+로컬 소스에서 바로 실행할 수도 있습니다.
+
+```powershell
+python -m app.install_manager --help
+```
+
+## 주요 명령
+
+### 1. `init`
+
+대상 저장소에 얇은 workflow를 처음 설치합니다.
+
+```powershell
+issue-to-pr-bot-manager init `
   --target C:\path\to\target-repo `
-  --engine-repository IncleRepo/issue-to-pr-bot `
-  --engine-ref main `
-  --runner-label self-hosted `
-  --runner-label Windows `
   --write-config
 ```
 
-설치 매니저가 하는 일:
+이 명령이 해주는 일:
 
 - issue comment workflow 생성
-- 선택 시 review workflow 2개 추가 생성
-- 선택 시 최소 `.issue-to-pr-bot.yml` 생성
+- 선택 시 review workflow 생성
+- 최소 `.issue-to-pr-bot.yml` 생성
 - 중앙 engine repo / ref / runner labels 값 반영
-- 기존 파일이 있으면 기본적으로 건드리지 않고, `--force`일 때만 덮어씀
 
-설치 매니저가 하지 않는 일:
+### 2. `update`
 
-- GitHub App 자동 생성
-- repository secret 자동 등록
-- self-hosted runner 자동 설치
-
-즉 설치 매니저는 "대상 저장소 파일 배치"를 자동화하는 MVP이고, GitHub 설정 자체는 사람이 한 번 연결해야 합니다.
-
-## 2. 사용하는 법: 빈 저장소에서 처음부터 적용하기
-
-이 섹션은 "완전 빈 저장소" 기준입니다. 아래 순서대로만 하면 됩니다.
-
-### 2-1. 새 저장소 만들기
-
-GitHub에서 새 저장소를 만듭니다.
-
-예시:
-
-- 저장소 이름: `my-test-bot-repo`
-
-처음에는 정말 비어 있어도 됩니다.
-
-### 2-2. 이 저장소를 로컬에 clone 하기
+이미 설치된 관리 파일을 최신 템플릿 기준으로 다시 반영합니다.
 
 ```powershell
-git clone https://github.com/<내계정>/my-test-bot-repo.git
-cd my-test-bot-repo
+issue-to-pr-bot-manager update `
+  --target C:\path\to\target-repo `
+  --write-config
 ```
 
-### 2-3. 내 GitHub App 만들기
+이 명령은 사실상 `force` 재생성에 가깝습니다. 여러 저장소를 한 번씩 돌려서 caller workflow를 갱신할 때 유용합니다.
 
-GitHub에서 새 GitHub App을 하나 만듭니다.
+### 3. `doctor`
 
-App 이름은 자유입니다.
+현재 머신과 대상 저장소가 실행 준비가 되었는지 점검합니다.
+
+```powershell
+issue-to-pr-bot-manager doctor `
+  --target C:\path\to\target-repo `
+  --repo IncleRepo/my-target-repo `
+  --runner-root C:\actions-runner
+```
+
+점검 항목:
+
+- Python / Git / Docker / Codex / GitHub CLI 존재 여부
+- Docker daemon 응답 여부
+- Codex 로그인 파일 존재 여부
+- self-hosted runner 경로 확인
+- 대상 저장소 workflow 설치 여부
+- `gh`를 통한 저장소 변수/시크릿 존재 여부
+
+### 4. `configure-github`
+
+GitHub CLI(`gh`)를 사용해 대상 저장소 변수와 시크릿을 설정합니다.
+
+```powershell
+issue-to-pr-bot-manager configure-github `
+  --repo IncleRepo/my-target-repo `
+  --bot-mention @my-issue-to-pr-bot `
+  --bot-app-id 123456 `
+  --bot-app-private-key-file C:\keys\my-app.pem
+```
+
+설정되는 값:
+
+- repository variable `BOT_MENTION`
+- repository variable `BOT_APP_ID`
+- repository secret `BOT_APP_PRIVATE_KEY`
+
+### 5. `bootstrap`
+
+가장 실전적인 명령입니다. 설치, 선택적 GitHub 설정, 상태 점검을 한 번에 묶습니다.
+
+```powershell
+issue-to-pr-bot-manager bootstrap `
+  --target C:\path\to\target-repo `
+  --repo IncleRepo/my-target-repo `
+  --bot-mention @my-issue-to-pr-bot `
+  --bot-app-id 123456 `
+  --bot-app-private-key-file C:\keys\my-app.pem `
+  --write-config `
+  --runner-root C:\actions-runner
+```
+
+추천 흐름은 아래처럼 보면 됩니다.
+
+1. `bootstrap`으로 대상 저장소 파일 설치
+2. 같은 명령에서 GitHub 변수/시크릿 설정
+3. 마지막 doctor 결과로 부족한 항목 확인
+
+## 대상 저장소에 남는 최소 파일
+
+최소 설치 기준으로는 아래 정도만 남습니다.
+
+```text
+.github/workflows/issue-comment.yml
+.issue-to-pr-bot.yml   # 선택
+```
+
+리뷰 자동화까지 쓰려면 아래 두 파일을 추가합니다.
+
+```text
+.github/workflows/pull-request-review.yml
+.github/workflows/pull-request-review-comment.yml
+```
+
+## GitHub App 준비
+
+App 이름은 멘션 이름이 됩니다.
 
 예시:
 
-- `my-issue-to-pr-bot`
+- App 이름: `my-issue-to-pr-bot`
+- 댓글 멘션: `@my-issue-to-pr-bot`
 
-중요:
-
-- App 이름이 GitHub 멘션 이름이 됩니다.
-- 위 이름이면 댓글에서 `@my-issue-to-pr-bot` 로 부릅니다.
-
-### 2-4. GitHub App 권한 설정
-
-App 생성 화면에서 아래 권한을 켭니다.
-
-Repository permissions:
+권장 권한:
 
 - `Contents` -> Read and write
 - `Issues` -> Read and write
@@ -172,49 +222,19 @@ Repository permissions:
 - `Metadata` -> Read-only
 - `Workflows` -> Read and write
 
-Subscribe to events:
+필요 이벤트:
 
 - `Issue comment`
 - `Pull request review`
 - `Pull request review comment`
 
-설치 대상은 보통:
+준비해야 할 값:
 
-- `Only on this account`
+- `BOT_MENTION`
+- `BOT_APP_ID`
+- `BOT_APP_PRIVATE_KEY`
 
-으로 시작하면 충분합니다.
-
-### 2-5. App 정보 준비
-
-App 생성 후 아래 3개를 확인합니다.
-
-1. App 멘션 이름
-2. App ID
-3. Private key PEM
-
-예시:
-
-- 멘션 이름: `@my-issue-to-pr-bot`
-- App ID: `123456`
-- Private key: GitHub에서 발급한 `.pem`
-
-Private key는 App 화면에서 발급받아야 합니다.
-
-### 2-6. App을 내 저장소에 설치
-
-방금 만든 App을 실제 사용할 저장소에 설치합니다.
-
-즉:
-
-1. App 생성
-2. 저장소 선택
-3. 설치
-
-까지 끝내면 저장소 연결이 완료됩니다.
-
-### 2-7. 내 PC에 self-hosted runner 준비
-
-봇은 GitHub 기본 서버가 아니라 **내 PC 또는 내 서버**에서 돌아갑니다.
+## self-hosted runner 준비
 
 필수 준비물:
 
@@ -222,9 +242,7 @@ Private key는 App 화면에서 발급받아야 합니다.
 - Docker
 - Git
 - Python
-- Codex CLI 로그인 완료
-
-### 2-8. runner 실행
+- Codex CLI 로그인
 
 예시:
 
@@ -233,123 +251,27 @@ cd C:\actions-runner
 .\run.cmd
 ```
 
-정상 상태면 아래 문구가 보입니다.
+정상 상태라면 다음과 비슷한 문구가 보입니다.
 
 - `Connected to GitHub`
 - `Listening for Jobs`
 
-### 2-9. workflow 파일 넣기
+## Codex 로그인
 
-대상 저장소에는 GitHub 이벤트를 받기 위한 workflow 파일이 필요합니다.
+호스트 머신에서 Codex CLI가 로그인되어 있어야 합니다.
 
-필수:
+보통 아래 파일이 필요합니다.
 
-- `.github/workflows/issue-comment.yml`
+- `%USERPROFILE%\.codex\auth.json`
+- `%USERPROFILE%\.codex\config.toml`
 
-권장:
+이 프로젝트는 호스트의 Codex 인증을 Docker 실행 시점에 마운트해서 사용합니다.
 
-- `.github/workflows/pull-request-review.yml`
-- `.github/workflows/pull-request-review-comment.yml`
+즉 이미지 안에 로그인 정보가 들어있는 구조가 아니라, 호스트 인증을 컨테이너가 읽는 구조입니다.
 
-가장 쉬운 방법:
+## `.issue-to-pr-bot.yml`
 
-1. 이 저장소의 `templates/` 폴더를 엽니다.
-2. 아래 파일들을 대상 저장소에 복사합니다.
-
-- `templates/issue-comment.yml.example`
-- `templates/pull-request-review.yml.example`
-- `templates/pull-request-review-comment.yml.example`
-
-3. 대상 저장소에서 파일명을 아래처럼 바꿉니다.
-
-```text
-.github/workflows/issue-comment.yml
-.github/workflows/pull-request-review.yml
-.github/workflows/pull-request-review-comment.yml
-```
-
-설치 매니저를 쓰면 이 과정을 수동 복사 없이 한 번에 처리할 수 있습니다.
-
-예시:
-
-```powershell
-python -m app.install_manager init --target . --write-config
-```
-
-### 2-10. self-hosted runner가 yml에서 어떻게 쓰이는지
-
-많이 헷갈리는 부분이라 아주 간단히 적습니다.
-
-- runner 프로그램은 내 PC에서 직접 실행합니다.
-- workflow yml은 그 runner를 쓰라고 지정합니다.
-
-템플릿 workflow에는 이런 값이 들어 있습니다.
-
-```yml
-with:
-  runner_labels_json: '["self-hosted","Windows"]'
-```
-
-뜻:
-
-- `self-hosted`: GitHub 기본 서버 말고 내가 직접 띄운 runner를 써라
-- `Windows`: Windows runner를 써라
-
-즉:
-
-1. 내 PC에서 runner를 켠다
-2. yml이 그 runner를 잡아서 실행한다
-
-둘 다 있어야 돌아갑니다.
-
-### 2-11. 저장소 변수와 secret 넣기
-
-대상 저장소 `Settings > Secrets and variables > Actions` 로 갑니다.
-
-Repository variables:
-
-- `BOT_MENTION`
-- `BOT_APP_ID`
-
-Repository secrets:
-
-- `BOT_APP_PRIVATE_KEY`
-
-넣는 값:
-
-- `BOT_MENTION` = 내 App 멘션 이름  
-  예: `@my-issue-to-pr-bot`
-- `BOT_APP_ID` = 내 App ID  
-  예: `123456`
-- `BOT_APP_PRIVATE_KEY` = 내 App의 `.pem` 파일 내용 전체
-
-즉 이 단계는 "공용 App"이 아니라 **각자 자기 App 정보**를 넣는 단계입니다.
-
-### 2-12. Codex 로그인 확인
-
-내 PC에서 Codex CLI가 로그인되어 있어야 합니다.
-
-보통 아래 파일이 있어야 합니다.
-
-- `%USERPROFILE%\\.codex\\auth.json`
-- `%USERPROFILE%\\.codex\\config.toml`
-
-### 2-13. 선택 파일 넣기
-
-이 단계는 필수는 아니지만 정확도를 높여줍니다.
-
-권장 파일:
-
-- `README.md`
-- `AGENTS.md`
-- `CONTRIBUTING.md`
-- `.github/pull_request_template.md`
-
-선택 설정 파일:
-
-- `.issue-to-pr-bot.yml`
-
-`.issue-to-pr-bot.yml`이 없어도 됩니다.
+이 파일은 없어도 기본 동작이 가능합니다. 처음에는 되도록 없이 시작하는 편이 좋습니다.
 
 최소 예시:
 
@@ -358,13 +280,13 @@ bot:
   output_dir: "bot-output"
 ```
 
-중요:
+언제 추가하면 좋은가:
 
-- `required_context_paths`는 문서에서 자동 추론하지 않습니다.
-- `required_secret_env`는 문서에서 자동 추론하지 않습니다.
-- 필수 context나 필수 시크릿이 정말 필요할 때만 `.issue-to-pr-bot.yml`에 직접 적습니다.
+- 외부 문서를 반드시 읽어야 할 때
+- 특정 시크릿이 없으면 작업을 중단해야 할 때
+- 출력 디렉터리 정책을 바꾸고 싶을 때
 
-예시:
+확장 예시:
 
 ```yaml
 bot:
@@ -381,128 +303,20 @@ bot:
     - "DB_URL"
 ```
 
-위 예시 의미:
+## 대상 저장소에서 어떻게 요청하나
 
-- `docs/domain.md`는 저장소 안에 반드시 있어야 합니다.
-- `external:product/api.md`는 runner가 마운트한 외부 context 폴더 안에 반드시 있어야 합니다.
-- `DB_URL`은 없으면 작업을 중단합니다.
-- `OPENAI_API_KEY`는 있으면 사용하고, 없어도 중단하지 않습니다.
-
-### 2-14. 완전 최소 예시 파일 만들기
-
-정말 빈 저장소라면 아래 정도만 먼저 만들어도 됩니다.
-
-`README.md`
-
-```md
-# my-test-bot-repo
-
-테스트 저장소
-```
-
-`AGENTS.md`
-
-```md
-# Repository Agent Guide
-
-## Working Rules
-
-- Keep changes focused on the request.
-- Do not commit secrets or private keys.
-
-## Verification
-
-```powershell
-python -m compileall -q app tests
-python -m unittest discover -s tests
-```
-```
-
-### 2-15. 대상 저장소에 첫 commit / push
-
-```powershell
-git add .
-git commit -m "chore: bot workflow 초기 설정"
-git push
-```
-
-### 2-16. 첫 테스트 이슈 만들기
-
-GitHub에서 이슈를 하나 만듭니다.
+이슈나 PR에서 자연어로 요청하면 됩니다.
 
 예시:
 
-- 제목: `README에 로컬 실행 방법 추가`
-- 본문: `README.md에 로컬 실행 방법을 추가해줘.`
+- `@my-issue-to-pr-bot README 문구를 다듬어줘`
+- `@my-issue-to-pr-bot 이 리뷰 반영해줘`
+- `@my-issue-to-pr-bot main 반영하고 충돌 해결해줘`
+- `@my-issue-to-pr-bot 승인되면 머지해줘`
 
-### 2-17. 첫 실행 댓글 달기
+## 봇이 자동으로 읽는 문서
 
-이슈 댓글에 내 App 멘션으로 요청합니다.
-
-예시:
-
-```text
-@my-issue-to-pr-bot README에 로컬 실행 방법 추가해줘
-```
-
-### 2-18. 정상 동작하면 일어나는 일
-
-정상이라면 봇이:
-
-1. 댓글을 읽습니다.
-2. 저장소 문서를 읽습니다.
-3. 브랜치를 만듭니다.
-4. 코드를 수정합니다.
-5. 검증합니다.
-6. PR을 생성합니다.
-7. 결과를 댓글로 남깁니다.
-
-### 2-19. PR 수정 요청
-
-이미 올라온 PR에서 다시 수정시키고 싶으면 PR 댓글에 이렇게 적습니다.
-
-```text
-@my-issue-to-pr-bot 이 부분 다시 수정해줘
-```
-
-그러면 봇이 새 PR을 만드는 게 아니라 기존 PR 브랜치에 다시 push합니다.
-
-### 2-20. 리뷰 코멘트 반영
-
-코드 라인에 달린 리뷰 코멘트에서도 요청할 수 있습니다.
-
-```text
-@my-issue-to-pr-bot 이 리뷰 반영해줘
-```
-
-### 2-21. 충돌 해결 요청
-
-PR 브랜치가 main과 충돌 나면 이렇게 적습니다.
-
-```text
-@my-issue-to-pr-bot main 반영하고 충돌 해결해줘
-```
-
-### 2-22. merge 요청
-
-PR에서 이렇게 적습니다.
-
-```text
-@my-issue-to-pr-bot 승인되면 머지해줘
-```
-
-그러면 봇은 merge 의도를 기록하고, GitHub 보호 규칙이 만족되는 시점에 merge를 시도합니다.
-
-## 3. 기능 소개
-
-### 자연어 요청 처리
-
-- `/bot` 같은 명령어 없이 App 멘션 + 자연어만 받습니다.
-- 이슈, PR, 리뷰 코멘트, 리뷰 본문까지 처리합니다.
-
-### 저장소 규칙 자동 추론
-
-봇은 다음 문서를 읽고 규칙을 자동 반영합니다.
+봇은 저장소 안 문서를 읽고 규칙을 추론합니다.
 
 - `AGENTS.md`
 - `CONTRIBUTING.md`
@@ -513,7 +327,7 @@ PR에서 이렇게 적습니다.
 - `pyproject.toml`
 - `package.json`
 
-자동 추론 대상:
+이 문서들에서 주로 추론하는 내용:
 
 - 브랜치명 규칙
 - 커밋 메시지 규칙
@@ -521,133 +335,75 @@ PR에서 이렇게 적습니다.
 - 검증 명령
 - protected paths
 
-### 이슈 기반 구현
+## 실패하면 어떻게 되나
 
-- 이슈 댓글에서 요청을 받으면 새 브랜치를 만들고 PR을 생성합니다.
+이 프로젝트는 두 종류의 실패를 가능한 한 댓글로 보고합니다.
 
-### PR 기반 수정
+- 봇 엔진 내부 실패
+  - 예: 검증 실패, GitHub API 실패, context 누락
+- 워크플로 단계 실패
+  - 예: Docker 이미지 빌드 실패, 컨테이너 시작 실패
 
-- PR 일반 댓글에서 요청을 받으면 기존 PR 브랜치를 수정하고 다시 push합니다.
+즉 예전보다 실패 원인을 GitHub UI 안에서 바로 파악하기 쉬운 편입니다.
 
-### 리뷰 코멘트 반영
+## 프로젝트 구조
 
-- inline review comment와 review 본문 요청을 모두 처리합니다.
+주요 파일:
 
-### 충돌 해결 지원
+```text
+app/
+  install_manager.py       # 패키지형 중앙화 매니저 CLI
+  verification_policy.py   # 변경 범위 기반 검증 선택
+  runtime/orchestrator.py  # 전체 실행 흐름
+  runtime/comments.py      # 결과 / 실패 댓글 작성
+  codex_runner.py          # Codex 실행과 PR 생성 연결
+  github_pr.py             # git / GitHub API 처리
+  repo_rules.py            # 저장소 문서 기반 규칙 추론
+  verification.py          # 검증 실행
+app/manager_templates/     # 패키지 배포에도 포함되는 설치 템플릿
+templates/                 # 사람이 직접 복사해서 쓸 수 있는 템플릿
+tests/                     # 단위 테스트
+```
 
-- `main 반영`, `충돌 해결`, `rebase` 같은 자연어를 해석해 base sync를 시도합니다.
+## 로컬 개발
 
-### merge 요청 처리
-
-- `머지해줘`, `승인되면 머지해줘` 같은 요청을 받아 merge intent를 기록합니다.
-- 실제 merge 허용 여부는 GitHub branch protection 규칙을 따릅니다.
-
-### 첨부 링크 처리
-
-- 이슈/댓글에 들어간 링크를 수집합니다.
-- 텍스트 첨부는 일부 내용을 prompt에 포함합니다.
-- 이미지/PDF는 파일 경로와 메타 정보만 전달합니다.
-
-### 외부 context / secret 지원
-
-- 외부 문서 폴더를 read-only로 마운트할 수 있습니다.
-- secret env 파일을 주입할 수 있습니다.
-- 필수 context는 `.issue-to-pr-bot.yml`의 `required_context_paths`에 직접 적었을 때만 검사합니다.
-- 필수 secret은 `.issue-to-pr-bot.yml`의 `required_secret_env`에 직접 적었을 때만 검사합니다.
-
-### LLM 사용 최적화
-
-- prompt budget 적용
-- 문서 우선순위 선별
-- 첨부/프로젝트 구조 축약
-- 기본 effort 자동 라우팅
-- LLM 실행 시간과 prompt 크기 계측
-
-### 검증 후 PR 생성
-
-- 검증 실패 시 PR을 만들지 않습니다.
-- 실패 원인과 다음 행동을 댓글로 남깁니다.
-
-## 4. 빠른 체크리스트
-
-완전 최소 체크리스트만 다시 적으면:
-
-1. 저장소 생성
-2. 내 GitHub App 생성
-3. App 권한 설정
-4. App 설치
-5. App ID / PEM 준비
-6. runner 설치
-7. runner 실행
-8. workflow 파일 복사
-9. `BOT_MENTION`, `BOT_APP_ID`, `BOT_APP_PRIVATE_KEY` 등록
-10. Codex 로그인 확인
-11. 이슈 생성
-12. 댓글로 `@내-앱이름 ...` 실행
-
-## 5. 로컬 검증
+로컬 검증:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m compileall -q app tests
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-## 6. 중앙화 운영 가이드
-
-여러 저장소에 이 봇을 적용하려면 아래 구조가 가장 현실적입니다.
-
-1. 중앙 `engine repo`는 한 곳만 유지합니다.
-2. reusable workflow는 중앙 repo에서 버전 관리합니다.
-3. self-hosted runner는 가능하면 organization 단위로 공유합니다.
-4. 대상 저장소에는 설치 매니저로 얇은 workflow만 넣습니다.
-5. 저장소별로 정말 필요한 경우에만 `.issue-to-pr-bot.yml`을 추가합니다.
-
-이 구조의 장점:
-
-- 대상 저장소마다 Python 봇 코드를 복사할 필요가 없음
-- workflow 갱신 지점이 중앙 repo로 모임
-- 설치 실수와 drift를 줄이기 쉬움
-- 새 저장소 온보딩을 거의 "명령 한 번 + GitHub 설정 몇 개" 수준으로 줄일 수 있음
-
-한계:
-
-- GitHub Actions 기반인 이상 대상 저장소에 workflow caller 파일은 최소한 필요
-- GitHub App, secret, runner 준비는 완전 무설정으로 만들 수 없음
-
-완전한 중앙화가 필요하면 장기적으로는 GitHub App webhook 서버형 구조를 별도로 고려해야 합니다.
-
-## 7. 설치 매니저 사용법
-
-가장 단순한 설치:
+패키지형 매니저를 로컬에서 설치:
 
 ```powershell
-python -m app.install_manager init --target C:\repo --write-config
+python -m pip install .
 ```
 
-issue comment workflow만 최소 설치:
+설치 매니저 dry-run 예시:
 
 ```powershell
-python -m app.install_manager init --target C:\repo --skip-review-workflows
+issue-to-pr-bot-manager bootstrap `
+  --target C:\path\to\target-repo `
+  --write-config `
+  --dry-run
 ```
 
-기존 파일을 강제로 다시 생성:
+## 운영 팁
 
-```powershell
-python -m app.install_manager init --target C:\repo --write-config --force
-```
+- Actions를 유지하는 한, 대상 저장소에는 얇은 caller workflow만 남기는 방향이 가장 관리하기 쉽습니다.
+- organization이 있다면 runner와 variables/secrets를 가능한 한 조직 레벨로 중앙화하는 편이 좋습니다.
+- `.issue-to-pr-bot.yml`은 정말 필요할 때만 추가하세요.
+- 설치와 설정은 `bootstrap`, 정기 점검은 `doctor`, 템플릿 갱신은 `update`로 가져가는 운영이 가장 단순합니다.
 
-변경 예정 내용만 미리 보기:
+## 최소 체크리스트
 
-```powershell
-python -m app.install_manager init --target C:\repo --write-config --dry-run
-```
-
-설치 후 사람이 확인해야 할 것:
-
-- GitHub App 설치 여부
-- `BOT_MENTION`, `BOT_APP_ID`, `BOT_APP_PRIVATE_KEY` 등록 여부
-- self-hosted runner 실행 상태
-- Codex CLI 로그인 상태
+1. GitHub App 생성
+2. App 권한 / 이벤트 설정
+3. App을 대상 저장소에 설치
+4. self-hosted runner 실행
+5. Docker / Codex 로그인 확인
+6. `issue-to-pr-bot-manager bootstrap` 실행
+7. 이슈나 PR에서 봇 멘션 테스트
