@@ -292,14 +292,20 @@ bot:
 
 중요:
 
+- `required_context_paths`는 문서에서 자동 추론하지 않습니다.
 - `required_secret_env`는 문서에서 자동 추론하지 않습니다.
-- 필수 시크릿이 정말 필요할 때만 `.issue-to-pr-bot.yml`에 직접 적습니다.
+- 필수 context나 필수 시크릿이 정말 필요할 때만 `.issue-to-pr-bot.yml`에 직접 적습니다.
 
 예시:
 
 ```yaml
 bot:
   output_dir: "bot-output"
+  external_context_paths:
+    - "product"
+  required_context_paths:
+    - "docs/domain.md"
+    - "external:product/api.md"
   secret_env_keys:
     - "DB_URL"
     - "OPENAI_API_KEY"
@@ -309,6 +315,8 @@ bot:
 
 위 예시 의미:
 
+- `docs/domain.md`는 저장소 안에 반드시 있어야 합니다.
+- `external:product/api.md`는 runner가 마운트한 외부 context 폴더 안에 반드시 있어야 합니다.
 - `DB_URL`은 없으면 작업을 중단합니다.
 - `OPENAI_API_KEY`는 있으면 사용하고, 없어도 중단하지 않습니다.
 
@@ -444,7 +452,6 @@ PR에서 이렇게 적습니다.
 - PR 제목 규칙
 - 검증 명령
 - protected paths
-- required context
 
 ### 이슈 기반 구현
 
@@ -477,7 +484,7 @@ PR에서 이렇게 적습니다.
 
 - 외부 문서 폴더를 read-only로 마운트할 수 있습니다.
 - secret env 파일을 주입할 수 있습니다.
-- 필수 문서는 문서에서 추론할 수 있습니다.
+- 필수 context는 `.issue-to-pr-bot.yml`의 `required_context_paths`에 직접 적었을 때만 검사합니다.
 - 필수 secret은 `.issue-to-pr-bot.yml`의 `required_secret_env`에 직접 적었을 때만 검사합니다.
 
 ### LLM 사용 최적화

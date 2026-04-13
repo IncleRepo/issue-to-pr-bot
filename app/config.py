@@ -63,6 +63,9 @@ def load_config(workspace: Path) -> BotConfig:
     values = parse_simple_bot_config(config_path.read_text(encoding="utf-8-sig"))
     return BotConfig(
         output_dir=values.get("output_dir", defaults.output_dir),
+        context_paths=as_string_list(values.get("context_paths"), defaults.context_paths),
+        external_context_paths=as_string_list(values.get("external_context_paths"), defaults.external_context_paths),
+        required_context_paths=as_string_list(values.get("required_context_paths"), defaults.required_context_paths),
         secret_env_keys=as_string_list(values.get("secret_env_keys"), defaults.secret_env_keys),
         required_secret_env=as_string_list(values.get("required_secret_env"), defaults.required_secret_env),
     )

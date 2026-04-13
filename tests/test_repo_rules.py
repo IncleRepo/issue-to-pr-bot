@@ -123,7 +123,7 @@ class RepoRulesTest(unittest.TestCase):
             [".github/workflows/**", ".env", ".venv/", "*.pem"],
         )
 
-    def test_resolve_bot_config_infers_required_context_and_load_paths(self) -> None:
+    def test_resolve_bot_config_does_not_infer_required_context_from_docs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             workspace.joinpath("README.md").write_text(
@@ -142,15 +142,16 @@ class RepoRulesTest(unittest.TestCase):
 
             resolved = resolve_bot_config(
                 workspace,
-                BotConfig(context_paths=["README.md"], external_context_paths=["product"]),
+                BotConfig(
+                    context_paths=["README.md"],
+                    external_context_paths=["product"],
+                    required_context_paths=["EXISTING.md"],
+                ),
             )
 
-        self.assertEqual(
-            resolved.required_context_paths,
-            ["docs/domain.md", "external:product/schema.sql"],
-        )
-        self.assertEqual(resolved.context_paths, ["README.md", "docs/domain.md"])
-        self.assertEqual(resolved.external_context_paths, ["product", "product/schema.sql"])
+        self.assertEqual(resolved.required_context_paths, ["EXISTING.md"])
+        self.assertEqual(resolved.context_paths, ["README.md"])
+        self.assertEqual(resolved.external_context_paths, ["product"])
 
     def test_resolve_bot_config_does_not_infer_required_secret_env_from_docs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -22,7 +22,7 @@ bot:
 
         self.assertEqual(config, BotConfig())
 
-    def test_load_config_reads_output_dir_and_required_secret_settings(self) -> None:
+    def test_load_config_reads_output_dir_context_and_secret_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             Path(temp_dir, ".issue-to-pr-bot.yml").write_text(
                 """
@@ -31,6 +31,13 @@ bot:
   output_dir: "agent-output"
   mode: "test-pr"
   provider: "other"
+  context_paths:
+    - "README.md"
+  external_context_paths:
+    - "product"
+  required_context_paths:
+    - "docs/domain.md"
+    - "external:product/api.md"
   secret_env_keys:
     - "DB_URL"
     - "OPENAI_API_KEY"
@@ -50,7 +57,9 @@ bot:
         self.assertEqual(config.provider, "codex")
         self.assertEqual(config.check_commands, [])
         self.assertEqual(config.branch_name_template, "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}")
-        self.assertEqual(config.required_context_paths, [])
+        self.assertEqual(config.context_paths, ["README.md"])
+        self.assertEqual(config.external_context_paths, ["product"])
+        self.assertEqual(config.required_context_paths, ["docs/domain.md", "external:product/api.md"])
         self.assertEqual(config.secret_env_keys, ["DB_URL", "OPENAI_API_KEY"])
         self.assertEqual(config.required_secret_env, ["DB_URL"])
 
