@@ -152,7 +152,7 @@ class RepoRulesTest(unittest.TestCase):
         self.assertEqual(resolved.context_paths, ["README.md", "docs/domain.md"])
         self.assertEqual(resolved.external_context_paths, ["product", "product/schema.sql"])
 
-    def test_resolve_bot_config_infers_required_secret_env_and_available_keys(self) -> None:
+    def test_resolve_bot_config_does_not_infer_required_secret_env_from_docs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             workspace.joinpath("AGENTS.md").write_text(
@@ -169,13 +169,13 @@ class RepoRulesTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            resolved = resolve_bot_config(workspace, BotConfig(secret_env_keys=["EXISTING_KEY"]))
+            resolved = resolve_bot_config(
+                workspace,
+                BotConfig(secret_env_keys=["EXISTING_KEY"], required_secret_env=["EXISTING_KEY"]),
+            )
 
-        self.assertEqual(resolved.required_secret_env, ["DB_URL", "OPENAI_API_KEY"])
-        self.assertEqual(
-            resolved.secret_env_keys,
-            ["EXISTING_KEY", "DB_URL", "OPENAI_API_KEY"],
-        )
+        self.assertEqual(resolved.required_secret_env, ["EXISTING_KEY"])
+        self.assertEqual(resolved.secret_env_keys, ["EXISTING_KEY"])
 
     def test_resolve_bot_config_does_not_treat_tutorial_variables_as_required_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

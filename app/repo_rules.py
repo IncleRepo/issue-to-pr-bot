@@ -47,13 +47,8 @@ REQUIRED_CONTEXT_HEADER_PATTERN = re.compile(
     r"^(required context|required docs?|required documents?|필수 문서|필수 컨텍스트)",
     re.IGNORECASE,
 )
-REQUIRED_SECRET_HEADER_PATTERN = re.compile(
-    r"^(required secrets?|required env|required environment variables?|필수 secret|필수 secrets|필수 환경 변수)",
-    re.IGNORECASE,
-)
 REQUIRED_LINE_PATTERN = re.compile(r"(required|requires|must provide|필수|반드시)\b", re.IGNORECASE)
 BACKTICK_PATTERN = re.compile(r"`([^`]+)`")
-ENV_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def resolve_bot_config(workspace: Path, config: BotConfig) -> BotConfig:
@@ -98,17 +93,6 @@ def resolve_bot_config(workspace: Path, config: BotConfig) -> BotConfig:
         replacements["external_context_paths"] = merge_unique(
             config.external_context_paths,
             [path[len("external:") :].strip() for path in inferred_required_context if path.startswith("external:")],
-        )
-
-    inferred_required_secrets = infer_required_secret_env(documents)
-    if inferred_required_secrets:
-        replacements["required_secret_env"] = merge_unique(
-            config.required_secret_env,
-            inferred_required_secrets,
-        )
-        replacements["secret_env_keys"] = merge_unique(
-            config.secret_env_keys,
-            inferred_required_secrets,
         )
 
     if not replacements:
@@ -211,23 +195,6 @@ def infer_required_context_paths(documents: dict[str, str]) -> list[str]:
                         paths.append(path)
 
     return paths
-
-
-def infer_required_secret_env(documents: dict[str, str]) -> list[str]:
-    keys: list[str] = []
-    for text in documents.values():
-        for key in infer_yaml_list(text, "required_secret_env"):
-            if is_env_key(key) and key not in keys:
-                keys.append(key)
-
-        for section in extract_markdown_sections(text):
-            heading = section["heading"].strip()
-            if REQUIRED_SECRET_HEADER_PATTERN.search(heading):
-                for key in infer_secret_keys_from_text(section["body"]):
-                    if key not in keys:
-                        keys.append(key)
-
-    return keys
 
 
 def infer_yaml_check_commands(text: str) -> list[str]:
@@ -340,33 +307,6 @@ def infer_context_paths_from_lines(text: str) -> list[str]:
     return paths
 
 
-def infer_secret_keys_from_text(text: str) -> list[str]:
-    keys: list[str] = []
-    for key in infer_secret_keys_from_lines(text):
-        if key not in keys:
-            keys.append(key)
-    return keys
-
-
-def infer_secret_keys_from_lines(text: str) -> list[str]:
-    keys: list[str] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if not REQUIRED_LINE_PATTERN.search(line) and not line.startswith("- "):
-            continue
-        for candidate in BACKTICK_PATTERN.findall(line):
-            candidate = candidate.strip().strip("`")
-            if is_env_key(candidate) and candidate not in keys:
-                keys.append(candidate)
-        if line.startswith("- "):
-            candidate = line[2:].strip().strip('"').strip("'").strip("`")
-            if is_env_key(candidate) and candidate not in keys:
-                keys.append(candidate)
-    return keys
-
-
 def is_path_pattern(value: str) -> bool:
     if not value or " " in value:
         return False
@@ -389,10 +329,6 @@ def is_context_path(value: str) -> bool:
     if any(token in value for token in ("{issue_", "{slug", "{branch_", "{{")):
         return False
     return value.startswith(".") or "/" in value or "\\" in value or "." in Path(value).name
-
-
-def is_env_key(value: str) -> bool:
-    return bool(value) and bool(ENV_KEY_PATTERN.fullmatch(value))
 
 
 def merge_unique(base_values: list[str], extra_values: list[str]) -> list[str]:
