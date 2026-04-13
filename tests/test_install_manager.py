@@ -10,8 +10,10 @@ from app.install_manager import (
     DEFAULT_ENGINE_REPOSITORY,
     DoctorOptions,
     GithubConfigurationOptions,
+    HostBootstrapOptions,
     InstallManagerOptions,
     bootstrap_repository_environment,
+    bootstrap_host_environment,
     configure_repository_settings,
     install_repository_environment,
     main,
@@ -237,6 +239,90 @@ class InstallManagerTest(unittest.TestCase):
 
         self.assertIsNotNone(result.github_result)
         self.assertEqual(result.doctor_result.checks[0].status, "pass")
+
+    @patch("app.install_manager.run_doctor")
+    def test_bootstrap_host_requires_codex_login_before_runner_setup(self, mock_doctor) -> None:
+        from app.install_manager import DoctorCheck, DoctorResult
+
+        mock_doctor.return_value = DoctorResult(
+            checks=[
+                DoctorCheck(name="Python", status="pass", detail="ok"),
+                DoctorCheck(name="Git", status="pass", detail="ok"),
+                DoctorCheck(name="Docker CLI", status="pass", detail="ok"),
+                DoctorCheck(name="Docker daemon", status="pass", detail="ok"),
+                DoctorCheck(name="Codex CLI", status="pass", detail="ok"),
+                DoctorCheck(name="Codex auth", status="fail", detail="login required"),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, self.assertRaises(RuntimeError):
+            bootstrap_host_environment(
+                HostBootstrapOptions(
+                    runner_root=Path(temp_dir),
+                    repository="Acme/example",
+                )
+            )
+
+    @patch("app.install_manager.ensure_runner_service_started")
+    @patch("app.install_manager.configure_runner")
+    @patch("app.install_manager.generate_runner_registration_token", return_value="runner-token")
+    @patch("app.install_manager.extract_runner_archive")
+    @patch("app.install_manager.download_runner_archive")
+    @patch("app.install_manager.resolve_runner_archive_source")
+    @patch("app.install_manager.run_doctor")
+    def test_bootstrap_host_downloads_and_registers_runner(
+        self,
+        mock_doctor,
+        mock_resolve_runner_archive_source,
+        mock_download_runner_archive,
+        mock_extract_runner_archive,
+        _mock_generate_runner_registration_token,
+        mock_configure_runner,
+        mock_ensure_runner_service_started,
+    ) -> None:
+        from app.install_manager import DoctorCheck, DoctorResult, RunnerArchiveSource
+
+        mock_doctor.return_value = DoctorResult(
+            checks=[
+                DoctorCheck(name="Python", status="pass", detail="ok"),
+                DoctorCheck(name="Git", status="pass", detail="ok"),
+                DoctorCheck(name="Docker CLI", status="pass", detail="ok"),
+                DoctorCheck(name="Docker daemon", status="pass", detail="ok"),
+                DoctorCheck(name="Codex CLI", status="pass", detail="ok"),
+                DoctorCheck(name="Codex auth", status="pass", detail="ok"),
+            ]
+        )
+        mock_resolve_runner_archive_source.return_value = RunnerArchiveSource(
+            url="https://example.com/actions-runner.zip",
+            name="actions-runner.zip",
+            description="download",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runner_root = Path(temp_dir)
+
+            def fake_extract(_archive_path, destination):
+                (destination / "config.cmd").write_text("@echo off\n", encoding="utf-8")
+                (destination / "run.cmd").write_text("@echo off\n", encoding="utf-8")
+                (destination / "svc.cmd").write_text("@echo off\n", encoding="utf-8")
+
+            mock_extract_runner_archive.side_effect = fake_extract
+
+            result = bootstrap_host_environment(
+                HostBootstrapOptions(
+                    runner_root=runner_root,
+                    repository="Acme/example",
+                    runner_name="runner-01",
+                    run_as_service=True,
+                )
+            )
+
+        self.assertEqual(result.operations[0].action, "prepared")
+        self.assertTrue(any(operation.name == "Runner download" for operation in result.operations))
+        self.assertTrue(any(operation.name == "Runner registration" and operation.action == "configured" for operation in result.operations))
+        mock_download_runner_archive.assert_called_once()
+        mock_configure_runner.assert_called_once()
+        mock_ensure_runner_service_started.assert_called_once()
 
 
 def _completed(*, stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:

@@ -96,6 +96,31 @@ cd C:\actions-runner
 - `Connected to GitHub`
 - `Listening for Jobs`
 
+직접 runner를 수동 설치해도 되지만, 이제는 매니저로 호스트 준비까지 도와줄 수 있습니다.
+
+예시:
+
+```powershell
+issue-to-pr-bot-manager bootstrap-host `
+  --runner-root C:\actions-runner `
+  --repo IncleRepo/my-target-repo `
+  --run-as-service
+```
+
+이 명령이 하는 일:
+
+- Python / Git / Docker / Codex / Codex 로그인 상태 확인
+- runner 바이너리가 없으면 Windows runner 다운로드 및 압축 해제
+- runner 등록 토큰이 없으면 `gh`로 자동 발급 시도
+- self-hosted runner 등록
+- 선택 시 Windows 서비스 설치 및 시작
+
+중요:
+
+- Codex 로그인이 없으면 먼저 로그인하라는 메시지를 내고 중단합니다.
+- Docker 설치 자체까지 자동으로 하지는 않습니다.
+- `gh`가 로그인되어 있지 않다면 `--runner-token`을 직접 넘길 수 있습니다.
+
 ## 3. Codex 로그인 확인하기
 
 호스트 머신에서 Codex CLI가 로그인되어 있어야 합니다.
@@ -150,6 +175,15 @@ issue-to-pr-bot-manager bootstrap `
 - 최소 설정 파일 생성
 - GitHub 변수/시크릿 등록
 - 로컬 머신 준비 상태 진단
+
+호스트 쪽을 먼저 준비하고 싶다면:
+
+```powershell
+issue-to-pr-bot-manager bootstrap-host `
+  --runner-root C:\actions-runner `
+  --repo IncleRepo/my-target-repo `
+  --run-as-service
+```
 
 ### 최소 설치만 하고 싶다면
 

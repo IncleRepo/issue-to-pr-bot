@@ -4,8 +4,11 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import urllib.request
+import zipfile
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -15,6 +18,7 @@ from typing import Sequence
 DEFAULT_ENGINE_REPOSITORY = "IncleRepo/issue-to-pr-bot"
 DEFAULT_ENGINE_REF = "main"
 DEFAULT_RUNNER_LABELS = ["self-hosted", "Windows"]
+DEFAULT_RUNNER_WORK_DIRECTORY = "_work"
 CONFIG_TEMPLATE_NAME = ".issue-to-pr-bot.yml.example"
 WORKFLOW_SPECS = (
     ("issue-comment.yml.example", ".github/workflows/issue-comment.yml"),
@@ -33,6 +37,16 @@ DEFAULT_RUNNER_ROOT_CANDIDATES = (
     Path.home() / "actions-runner",
     Path.home() / "actions-runner-live",
 )
+LATEST_RUNNER_RELEASE_API = "https://api.github.com/repos/actions/runner/releases/latest"
+RUNNER_RELEASE_USER_AGENT = "issue-to-pr-bot-manager"
+CRITICAL_HOST_CHECKS = {
+    "Python",
+    "Git",
+    "Docker CLI",
+    "Docker daemon",
+    "Codex CLI",
+    "Codex auth",
+}
 
 
 @dataclass(frozen=True)
@@ -108,6 +122,45 @@ class BootstrapResult:
     github_result: GithubConfigurationResult | None
 
 
+@dataclass(frozen=True)
+class HostBootstrapOptions:
+    runner_root: Path
+    repository: str | None = None
+    organization: str | None = None
+    runner_url: str | None = None
+    runner_token: str | None = None
+    runner_name: str | None = None
+    runner_labels: list[str] | None = None
+    runner_archive: Path | None = None
+    runner_download_url: str | None = None
+    runner_work_directory: str = DEFAULT_RUNNER_WORK_DIRECTORY
+    run_as_service: bool = False
+    replace_existing: bool = True
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class HostBootstrapOperation:
+    name: str
+    action: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class HostBootstrapResult:
+    runner_root: Path
+    doctor_result: DoctorResult
+    operations: list[HostBootstrapOperation]
+    next_steps: list[str]
+
+
+@dataclass(frozen=True)
+class RunnerArchiveSource:
+    url: str
+    name: str
+    description: str
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -136,6 +189,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 build_github_configuration_options(args, required=False),
             )
             print(format_bootstrap_result(result))
+            return 0
+        if args.command == "bootstrap-host":
+            result = bootstrap_host_environment(build_host_bootstrap_options(args))
+            print(format_host_bootstrap_result(result))
             return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -183,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_install_arguments(bootstrap_parser)
     add_doctor_arguments(bootstrap_parser)
     add_github_configuration_arguments(bootstrap_parser)
+
+    bootstrap_host_parser = subparsers.add_parser(
+        "bootstrap-host",
+        help="Prepare the Windows host: validate prerequisites and register a self-hosted runner.",
+    )
+    add_host_bootstrap_arguments(bootstrap_host_parser)
 
     return parser
 
@@ -246,6 +309,42 @@ def add_github_configuration_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_host_bootstrap_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--runner-root", required=True, help="Path where the self-hosted runner should live.")
+    parser.add_argument("--repo", help="Repository slug like owner/name for a repository-level runner.")
+    parser.add_argument("--org", help="Organization name for an organization-level runner.")
+    parser.add_argument("--runner-url", help="Explicit runner registration URL. Overrides --repo/--org.")
+    parser.add_argument("--runner-token", help="Registration token. If omitted, `gh api` is used when possible.")
+    parser.add_argument("--runner-name", help="Runner name. Defaults to this machine name.")
+    parser.add_argument(
+        "--runner-label",
+        action="append",
+        help="Optional custom runner label. Repeat to add multiple labels.",
+    )
+    parser.add_argument("--runner-archive", help="Path to a pre-downloaded runner zip archive.")
+    parser.add_argument("--runner-download-url", help="Explicit runner zip download URL.")
+    parser.add_argument(
+        "--runner-work-directory",
+        default=DEFAULT_RUNNER_WORK_DIRECTORY,
+        help="Runner work directory passed to config.cmd.",
+    )
+    parser.add_argument(
+        "--run-as-service",
+        action="store_true",
+        help="Install and start the runner as a Windows service after configuration.",
+    )
+    parser.add_argument(
+        "--no-replace-existing",
+        action="store_true",
+        help="Do not pass --replace when configuring the runner.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would happen without downloading or configuring the runner.",
+    )
+
+
 def build_install_options(args: argparse.Namespace, *, force_default: bool = False) -> InstallManagerOptions:
     return InstallManagerOptions(
         target=Path(args.target).resolve(),
@@ -297,6 +396,34 @@ def build_github_configuration_options(
         bot_mention=mention,
         bot_app_id=app_id,
         bot_app_private_key_file=Path(private_key_file).resolve(),
+        dry_run=args.dry_run,
+    )
+
+
+def build_host_bootstrap_options(args: argparse.Namespace) -> HostBootstrapOptions:
+    repository = getattr(args, "repo", None)
+    organization = getattr(args, "org", None)
+    runner_url = getattr(args, "runner_url", None)
+
+    if repository and organization and not runner_url:
+        raise ValueError("--repo와 --org는 동시에 사용할 수 없습니다.")
+    if not any(value for value in (repository, organization, runner_url)):
+        raise ValueError("--repo, --org, --runner-url 중 하나는 필요합니다.")
+
+    runner_archive = Path(args.runner_archive).resolve() if getattr(args, "runner_archive", None) else None
+    return HostBootstrapOptions(
+        runner_root=Path(args.runner_root).resolve(),
+        repository=repository,
+        organization=organization,
+        runner_url=runner_url,
+        runner_token=getattr(args, "runner_token", None),
+        runner_name=getattr(args, "runner_name", None) or socket.gethostname(),
+        runner_labels=getattr(args, "runner_label", None),
+        runner_archive=runner_archive,
+        runner_download_url=getattr(args, "runner_download_url", None),
+        runner_work_directory=args.runner_work_directory,
+        run_as_service=args.run_as_service,
+        replace_existing=not args.no_replace_existing,
         dry_run=args.dry_run,
     )
 
@@ -433,7 +560,7 @@ def run_doctor(options: DoctorOptions) -> DoctorResult:
     else:
         checks.append(DoctorCheck("Codex CLI", "fail", "`codex`가 PATH에 없습니다. OpenAI Codex CLI 설치가 필요합니다."))
     checks.append(check_codex_auth_files())
-    checks.append(check_runner_root(options.runner_root))
+    checks.extend(check_runner_root(options.runner_root))
     checks.append(probe_command("GitHub CLI", "gh", ["--version"], required=False))
 
     if options.target is not None:
@@ -482,7 +609,7 @@ def check_codex_auth_files() -> DoctorCheck:
         return DoctorCheck(
             "Codex auth",
             "fail",
-            f"`{codex_home}`에서 {', '.join(missing)} 파일을 찾지 못했습니다.",
+            f"`{codex_home}`에서 {', '.join(missing)} 파일을 찾지 못했습니다. 먼저 Codex 로그인부터 완료하세요.",
         )
     return DoctorCheck("Codex auth", "pass", str(codex_home))
 
@@ -498,24 +625,39 @@ def resolve_codex_home() -> Path:
     return Path.home() / ".codex"
 
 
-def check_runner_root(explicit_runner_root: Path | None) -> DoctorCheck:
+def check_runner_root(explicit_runner_root: Path | None) -> list[DoctorCheck]:
     runner_root = explicit_runner_root or detect_runner_root()
     if runner_root is None:
-        return DoctorCheck(
-            "Self-hosted runner",
-            "warn",
-            "일반적인 runner 경로를 찾지 못했습니다. `--runner-root`로 경로를 지정하면 더 정확하게 점검할 수 있습니다.",
-        )
+        return [
+            DoctorCheck(
+                "Self-hosted runner",
+                "warn",
+                "일반적인 runner 경로를 찾지 못했습니다. `--runner-root`로 경로를 지정하면 더 정확하게 점검할 수 있습니다.",
+            )
+        ]
 
     run_cmd = runner_root / "run.cmd"
     config_cmd = runner_root / "config.cmd"
+    checks: list[DoctorCheck] = []
     if run_cmd.exists() or config_cmd.exists():
-        return DoctorCheck("Self-hosted runner", "pass", str(runner_root))
-    return DoctorCheck(
-        "Self-hosted runner",
-        "warn",
-        f"`{runner_root}`는 찾았지만 `run.cmd` 또는 `config.cmd`가 없습니다.",
+        checks.append(DoctorCheck("Self-hosted runner", "pass", str(runner_root)))
+        configured = (runner_root / ".runner").exists()
+        checks.append(
+            DoctorCheck(
+                "Runner registration",
+                "pass" if configured else "warn",
+                "이미 등록되어 있습니다." if configured else "runner 바이너리는 있지만 아직 GitHub에 등록되지 않았습니다.",
+            )
+        )
+        return checks
+    checks.append(
+        DoctorCheck(
+            "Self-hosted runner",
+            "warn",
+            f"`{runner_root}`는 찾았지만 `run.cmd` 또는 `config.cmd`가 없습니다.",
+        )
     )
+    return checks
 
 
 def detect_runner_root() -> Path | None:
@@ -676,6 +818,225 @@ def bootstrap_repository_environment(
     )
 
 
+def bootstrap_host_environment(options: HostBootstrapOptions) -> HostBootstrapResult:
+    doctor_result = run_doctor(DoctorOptions(repository=options.repository, runner_root=options.runner_root))
+    if not options.dry_run:
+        ensure_host_prerequisites(doctor_result)
+
+    operations: list[HostBootstrapOperation] = []
+    runner_root = options.runner_root
+
+    if options.dry_run:
+        operations.append(HostBootstrapOperation("Runner root", "would_prepare", str(runner_root)))
+    else:
+        runner_root.mkdir(parents=True, exist_ok=True)
+        operations.append(HostBootstrapOperation("Runner root", "prepared", str(runner_root)))
+
+    runner_installed = (runner_root / "config.cmd").exists() and (runner_root / "run.cmd").exists()
+    if runner_installed:
+        operations.append(HostBootstrapOperation("Runner binaries", "skipped", "이미 runner 바이너리가 있습니다."))
+    else:
+        archive_source = resolve_runner_archive_source(options)
+        archive_target = runner_root / archive_source.name
+        if options.dry_run:
+            operations.append(HostBootstrapOperation("Runner download", "would_download", archive_source.description))
+            operations.append(HostBootstrapOperation("Runner extract", "would_extract", str(runner_root)))
+        else:
+            download_runner_archive(archive_source, archive_target)
+            operations.append(HostBootstrapOperation("Runner download", "downloaded", str(archive_target)))
+            extract_runner_archive(archive_target, runner_root)
+            operations.append(HostBootstrapOperation("Runner extract", "extracted", str(runner_root)))
+
+    if options.dry_run:
+        operations.append(HostBootstrapOperation("Runner registration", "would_configure", build_runner_url(options)))
+    else:
+        config_cmd = runner_root / "config.cmd"
+        if not config_cmd.exists():
+            raise RuntimeError(f"`{config_cmd}`를 찾지 못했습니다. runner 압축 해제에 실패했는지 확인하세요.")
+        if not is_runner_registered(runner_root):
+            runner_token = options.runner_token or generate_runner_registration_token(options)
+            configure_runner(runner_root, options, runner_token)
+            operations.append(HostBootstrapOperation("Runner registration", "configured", build_runner_url(options)))
+        else:
+            operations.append(HostBootstrapOperation("Runner registration", "skipped", "이미 등록된 runner입니다."))
+
+    if options.run_as_service:
+        if options.dry_run:
+            operations.append(HostBootstrapOperation("Runner service", "would_install_and_start", str(runner_root)))
+        else:
+            ensure_runner_service_started(runner_root)
+            operations.append(HostBootstrapOperation("Runner service", "installed_and_started", str(runner_root)))
+    else:
+        operations.append(
+            HostBootstrapOperation(
+                "Runner service",
+                "manual",
+                "필요하면 `run.cmd`를 직접 실행하거나 `--run-as-service`로 서비스 등록을 사용하세요.",
+            )
+        )
+
+    return HostBootstrapResult(
+        runner_root=runner_root,
+        doctor_result=doctor_result,
+        operations=operations,
+        next_steps=build_host_bootstrap_next_steps(options),
+    )
+
+
+def ensure_host_prerequisites(doctor_result: DoctorResult) -> None:
+    failures = [check for check in doctor_result.checks if check.name in CRITICAL_HOST_CHECKS and check.status != "pass"]
+    if not failures:
+        return
+    message = "; ".join(f"{check.name}: {check.detail}" for check in failures)
+    raise RuntimeError(f"호스트 준비가 끝나지 않았습니다. {message}")
+
+
+def resolve_runner_archive_source(options: HostBootstrapOptions) -> RunnerArchiveSource:
+    if options.runner_archive is not None:
+        if not options.runner_archive.exists():
+            raise FileNotFoundError(f"Runner archive does not exist: {options.runner_archive}")
+        return RunnerArchiveSource(
+            url=options.runner_archive.as_uri(),
+            name=options.runner_archive.name,
+            description=f"로컬 아카이브 {options.runner_archive}",
+        )
+
+    download_url = options.runner_download_url or fetch_latest_runner_download_url()
+    name = download_url.rstrip("/").split("/")[-1]
+    return RunnerArchiveSource(
+        url=download_url,
+        name=name,
+        description=download_url,
+    )
+
+
+def fetch_latest_runner_download_url() -> str:
+    request = urllib.request.Request(
+        LATEST_RUNNER_RELEASE_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": RUNNER_RELEASE_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(request) as response:
+        payload = json.load(response)
+
+    for asset in payload.get("assets", []):
+        name = asset.get("name", "")
+        if name.startswith("actions-runner-win-x64-") and name.endswith(".zip"):
+            browser_download_url = asset.get("browser_download_url")
+            if browser_download_url:
+                return browser_download_url
+    raise RuntimeError("최신 Windows x64 runner 다운로드 URL을 찾지 못했습니다.")
+
+
+def download_runner_archive(source: RunnerArchiveSource, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.url.startswith("file:"):
+        source_path = Path(urllib.request.url2pathname(source.url.removeprefix("file:///")))
+        shutil.copyfile(source_path, destination)
+        return
+
+    with urllib.request.urlopen(source.url) as response:
+        destination.write_bytes(response.read())
+
+
+def extract_runner_archive(archive_path: Path, runner_root: Path) -> None:
+    runner_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(runner_root)
+
+
+def is_runner_registered(runner_root: Path) -> bool:
+    return (runner_root / ".runner").exists()
+
+
+def generate_runner_registration_token(options: HostBootstrapOptions) -> str:
+    if not shutil.which("gh"):
+        raise RuntimeError("runner 토큰을 자동 발급하려면 `gh`가 필요합니다. 없으면 `--runner-token`을 직접 전달하세요.")
+
+    if options.repository is not None:
+        endpoint = f"repos/{options.repository}/actions/runners/registration-token"
+    elif options.organization is not None:
+        endpoint = f"orgs/{options.organization}/actions/runners/registration-token"
+    else:
+        raise RuntimeError("runner 토큰 자동 발급에는 `--repo` 또는 `--org`가 필요합니다.")
+
+    completed = run_command(["gh", "api", "-X", "POST", endpoint, "--jq", ".token"])
+    if completed.returncode != 0:
+        raise RuntimeError(f"runner 토큰 발급 실패: {summarize_command_failure(completed)}")
+    token = first_nonempty_line(completed.stdout)
+    if not token:
+        raise RuntimeError("runner 토큰 발급 결과가 비어 있습니다.")
+    return token
+
+
+def build_runner_url(options: HostBootstrapOptions) -> str:
+    if options.runner_url:
+        return options.runner_url
+    if options.repository:
+        return f"https://github.com/{options.repository}"
+    if options.organization:
+        return f"https://github.com/{options.organization}"
+    raise RuntimeError("runner 등록 URL을 결정할 수 없습니다.")
+
+
+def configure_runner(runner_root: Path, options: HostBootstrapOptions, runner_token: str) -> None:
+    config_cmd = runner_root / "config.cmd"
+    if not config_cmd.exists():
+        raise RuntimeError(f"`{config_cmd}`가 없어 runner를 등록할 수 없습니다.")
+
+    command = [
+        "cmd.exe",
+        "/c",
+        str(config_cmd),
+        "--unattended",
+        "--url",
+        build_runner_url(options),
+        "--token",
+        runner_token,
+        "--name",
+        options.runner_name or socket.gethostname(),
+        "--work",
+        options.runner_work_directory,
+    ]
+    if options.replace_existing:
+        command.append("--replace")
+    if options.runner_labels:
+        command.extend(["--labels", ",".join(options.runner_labels)])
+
+    completed = run_command(command)
+    if completed.returncode != 0:
+        raise RuntimeError(f"runner 등록 실패: {summarize_command_failure(completed)}")
+
+
+def ensure_runner_service_started(runner_root: Path) -> None:
+    service_script = runner_root / "svc.cmd"
+    if not service_script.exists():
+        raise RuntimeError(f"`{service_script}`가 없어 runner 서비스를 설치할 수 없습니다.")
+
+    install_result = run_command(["cmd.exe", "/c", str(service_script), "install"])
+    if install_result.returncode != 0:
+        raise RuntimeError(f"runner 서비스 설치 실패: {summarize_command_failure(install_result)}")
+
+    start_result = run_command(["cmd.exe", "/c", str(service_script), "start"])
+    if start_result.returncode != 0:
+        raise RuntimeError(f"runner 서비스 시작 실패: {summarize_command_failure(start_result)}")
+
+
+def build_host_bootstrap_next_steps(options: HostBootstrapOptions) -> list[str]:
+    steps = [
+        "Docker와 Codex 로그인은 계속 호스트에 유지해야 합니다.",
+    ]
+    if options.run_as_service:
+        steps.append("Actions 페이지에서 runner가 online으로 표시되는지 확인하세요.")
+    else:
+        steps.append("필요하면 runner 폴더에서 `run.cmd`를 직접 실행하세요.")
+    if options.dry_run:
+        steps.append("실제 구성하려면 같은 명령에서 `--dry-run`을 제거하세요.")
+    return steps
+
+
 def run_command(command: Sequence[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
@@ -759,6 +1120,25 @@ def format_bootstrap_result(result: BootstrapResult) -> str:
         sections.append(format_github_configuration_result(result.github_result))
     sections.append(format_doctor_result(result.doctor_result))
     return "\n\n".join(sections)
+
+
+def format_host_bootstrap_result(result: HostBootstrapResult) -> str:
+    lines = [
+        "## 호스트 준비 결과",
+        "",
+        f"- runner 경로: `{result.runner_root}`",
+        "",
+        "### 수행 작업",
+    ]
+    for operation in result.operations:
+        lines.append(f"- `{operation.name}` -> `{operation.action}` ({operation.detail})")
+    lines.extend(["", "### 호스트 진단"])
+    for check in result.doctor_result.checks:
+        lines.append(f"- [{check.status}] {check.name}: {check.detail}")
+    lines.extend(["", "### 다음 단계"])
+    for step in result.next_steps:
+        lines.append(f"- {step}")
+    return "\n".join(lines)
 
 
 def relative_to_target(path: Path, target: Path) -> str:
