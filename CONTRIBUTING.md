@@ -46,6 +46,20 @@ The bot also reads protected path rules from documentation.
 - `*.p12`
 - `*.pfx`
 
+## Required Context
+
+If the bot cannot find these inputs, it should stop instead of guessing.
+
+- `docs/domain.md`
+- `external:product/api.md`
+
+## Required Secrets
+
+If the issue needs external systems, document the required keys here.
+
+- `DB_URL`
+- `OPENAI_API_KEY`
+
 ## Safety
 
 - Never commit `.venv/`, `.ruff_cache/`, `__pycache__/`, `.env`, private keys, or tokens.
