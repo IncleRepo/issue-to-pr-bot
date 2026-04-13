@@ -1,0 +1,148 @@
+name: reusable-issue-bot
+
+on:
+  workflow_call:
+    inputs:
+      runner_labels_json:
+        description: JSON array for self-hosted runner labels
+        required: false
+        default: '["self-hosted","Windows"]'
+        type: string
+      engine_repository:
+        description: Repository that contains the bot engine
+        required: false
+        default: IncleRepo/issue-to-pr-bot
+        type: string
+      engine_ref:
+        description: Ref of the bot engine repository
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run-bot:
+    runs-on: ${{ fromJSON(inputs.runner_labels_json) }}
+
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          path: target-repo
+          persist-credentials: false
+
+      - name: Checkout bot engine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.engine_repository }}
+          ref: ${{ inputs.engine_ref }}
+          path: engine-repo
+          persist-credentials: false
+
+      - name: Reset target git state
+        shell: powershell
+        run: |
+          git -C target-repo config core.autocrlf false
+          git -C target-repo -c core.autocrlf=false reset --hard HEAD
+          git -C target-repo status --short
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - name: Build bot engine image
+        shell: powershell
+        run: docker build -t issue-to-pr-bot:ci engine-repo
+
+      - name: Verify Codex auth
+        shell: powershell
+        run: |
+          $codexHome = if ($env:CODEX_HOME_HOST) { $env:CODEX_HOME_HOST } else { Join-Path $env:USERPROFILE ".codex" }
+          $authPath = Join-Path $codexHome "auth.json"
+          $configPath = Join-Path $codexHome "config.toml"
+
+          if (-not (Test-Path -LiteralPath $authPath)) {
+            throw "Codex auth.json file not found: $authPath"
+          }
+
+          if (-not (Test-Path -LiteralPath $configPath)) {
+            throw "Codex config.toml file not found: $configPath"
+          }
+
+          docker run --rm `
+            --read-only `
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m `
+            --tmpfs /home/bot/.codex:rw,noexec,nosuid,size=8m,uid=1000,gid=1000 `
+            --cap-drop ALL `
+            --security-opt no-new-privileges `
+            -v "${authPath}:/run/codex-auth/auth.json:ro" `
+            -v "${configPath}:/run/codex-auth/config.toml:ro" `
+            issue-to-pr-bot:ci `
+            sh -lc "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && codex --version && codex login status"
+        env:
+          CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
+
+      - name: Run bot engine
+        shell: powershell
+        run: |
+          $codexHome = if ($env:CODEX_HOME_HOST) { $env:CODEX_HOME_HOST } else { Join-Path $env:USERPROFILE ".codex" }
+          $authPath = Join-Path $codexHome "auth.json"
+          $configPath = Join-Path $codexHome "config.toml"
+          $targetWorkspace = Join-Path $env:GITHUB_WORKSPACE "target-repo"
+          $dockerArgs = @(
+            "run", "--rm",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+            "--tmpfs", "/home/bot/.codex:rw,noexec,nosuid,size=8m,uid=1000,gid=1000",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "-e", "BOT_CREATE_PR=1",
+            "-e", "GITHUB_EVENT_PATH=/tmp/github_event.json",
+            "-e", "GITHUB_REPOSITORY=${env:GITHUB_REPOSITORY}",
+            "-e", "GITHUB_REF_NAME=${env:GITHUB_REF_NAME}",
+            "-e", "GITHUB_TOKEN=${env:GITHUB_TOKEN}",
+            "-e", "BOT_GITHUB_TOKEN=${env:BOT_GITHUB_TOKEN}",
+            "-e", "BOT_RESET_WORKTREE=1",
+            "-e", "BOT_EXTERNAL_CONTEXT_DIR=/run/external-context",
+            "-e", "BOT_SECRETS_FILE=/run/bot-secrets/secrets.env",
+            "-v", "${targetWorkspace}:/workspace",
+            "-v", "${env:GITHUB_EVENT_PATH}:/tmp/github_event.json:ro",
+            "-v", "${authPath}:/run/codex-auth/auth.json:ro",
+            "-v", "${configPath}:/run/codex-auth/config.toml:ro"
+          )
+
+          if ($env:BOT_CONTEXT_DIR_HOST) {
+            if (-not (Test-Path -LiteralPath $env:BOT_CONTEXT_DIR_HOST)) {
+              throw "External context directory not found: $env:BOT_CONTEXT_DIR_HOST"
+            }
+            $dockerArgs += @("-v", "${env:BOT_CONTEXT_DIR_HOST}:/run/external-context:ro")
+          }
+
+          if ($env:BOT_SECRETS_FILE_HOST) {
+            if (-not (Test-Path -LiteralPath $env:BOT_SECRETS_FILE_HOST)) {
+              throw "Secret env file not found: $env:BOT_SECRETS_FILE_HOST"
+            }
+            $dockerArgs += @("-v", "${env:BOT_SECRETS_FILE_HOST}:/run/bot-secrets/secrets.env:ro")
+          }
+
+          $dockerArgs += @(
+            "issue-to-pr-bot:ci",
+            "sh",
+            "-lc",
+            "cp /run/codex-auth/auth.json /home/bot/.codex/auth.json && cp /run/codex-auth/config.toml /home/bot/.codex/config.toml && chmod 600 /home/bot/.codex/auth.json /home/bot/.codex/config.toml && python -m app.main"
+          )
+
+          docker @dockerArgs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOT_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
+          BOT_CONTEXT_DIR_HOST: ${{ vars.BOT_CONTEXT_DIR_HOST }}
+          BOT_SECRETS_FILE_HOST: ${{ vars.BOT_SECRETS_FILE_HOST }}

@@ -18,28 +18,9 @@ jobs:
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'COLLABORATOR'
       )
-    runs-on: [self-hosted, Windows]
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/create-github-app-token@v2
-        id: app-token
-        with:
-          app-id: ${{ vars.BOT_APP_ID }}
-          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
-
-      - run: docker build -t issue-to-pr-bot:ci .
-
-      - shell: powershell
-        run: |
-          docker run --rm issue-to-pr-bot:ci sh -lc "python -m app.main"
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BOT_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
-          BOT_CONTEXT_DIR_HOST: ${{ vars.BOT_CONTEXT_DIR_HOST }}
-          BOT_SECRETS_FILE_HOST: ${{ vars.BOT_SECRETS_FILE_HOST }}
-
+    uses: IncleRepo/issue-to-pr-bot/.github/workflows/reusable-bot.yml@main
+    secrets: inherit
+    with:
+      runner_labels_json: '["self-hosted","Windows"]'
+      engine_repository: "IncleRepo/issue-to-pr-bot"
+      engine_ref: "main"
