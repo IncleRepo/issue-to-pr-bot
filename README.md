@@ -1,61 +1,115 @@
-# 🤖 issue-to-pr-bot
+# issue-to-pr-bot
 
-GitHub 이슈를 기반으로 코드 작성 및 Pull Request를 자동 생성하는 LLM 기반 개발 자동화 봇
+GitHub 이슈 댓글을 트리거로 받아, LLM이 코드를 수정하고 검증한 뒤 브랜치와 PR까지 생성하는 self-hosted automation bot이다.
 
-## 🚀 프로젝트 개요
+## 목적
 
-이 프로젝트는 GitHub 이슈 또는 댓글을 입력으로 받아
-LLM(Codex)을 활용해 코드를 생성하고, 자동으로 PR까지 생성하는 개인용 개발 자동화 도구입니다.
+- 이슈 기반 개발 자동화
+- 팀 문서 기반 규칙 자동 적용
+- self-hosted runner 환경에서 외부 문서와 secret을 함께 사용
+- 사람이 최종 리뷰하는 PR 중심 워크플로우 유지
 
-주요 목적은 반복적인 개발 작업을 줄이고,
-AI 기반 개발 워크플로우를 실험하는 데 있습니다.
+## 현재 지원 범위
 
-## 🧠 동작 흐름
+- 이슈 댓글 트리거
+  - `/bot run`
+  - `/bot plan`
+  - `/bot help`
+  - `/bot status`
+  - `@bot ...`
+- Codex provider 실행
+- 전용 브랜치 생성
+- 검증 명령 실행
+- PR 생성
+- 성공/실패 댓글 작성
+- 문서 기반 규칙 자동 추론
+- 외부 context / secret env 주입
+- 첨부 링크 수집과 텍스트 컨텍스트화
 
-이슈 / 댓글
-      ↓
-LLM (Codex CLI)
-      ↓
-코드 생성 및 수정
-      ↓
-Git 커밋 & 푸시
-      ↓
-Pull Request 생성
+## 동작 구조
 
-## ⚙️ 기술 스택
+1. GitHub 이슈 댓글이 workflow를 트리거한다.
+2. self-hosted runner가 Docker 컨테이너를 띄운다.
+3. 컨테이너 안에서 봇이 이슈, 댓글, 저장소 문서, 외부 문서, secret env를 읽는다.
+4. LLM provider가 코드를 수정한다.
+5. 검증 명령을 실행한다.
+6. 브랜치를 push하고 PR을 생성한다.
+7. 결과를 이슈 댓글로 남긴다.
 
-- Python
-- GitHub Actions
-- Self-hosted Runner
-- Docker sandbox
-- Codex CLI (ChatGPT Plus)
-- GitHub REST API
+## 빠른 시작
 
-## 🎯 주요 기능 (MVP)
+### 로컬 실행
 
-- [ ] 이슈 댓글로 봇 실행 (`/bot run`)
-- [ ] 이슈 내용 및 요구사항 파싱
-- [ ] Codex CLI를 통한 코드 생성
-- [ ] 브랜치 생성 및 커밋
-- [ ] Pull Request 자동 생성
+Windows PowerShell 기준:
 
-## 🔒 안전 장치
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m compileall -q app tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m app.main
+```
 
-- 모든 작업은 별도의 브랜치에서 수행
-- main 브랜치 직접 수정 금지
-- PR 생성 후 수동 리뷰 필수
-- 최소 권한 기반 실행
-- 봇 실행은 Docker 컨테이너 내부에서 격리
+### 기본 검증
 
-## 🛠️ 저장소별 설정
+```powershell
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m compileall -q app tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
 
-`.issue-to-pr-bot.yml`에서 저장소별 실행 옵션을 조정합니다.
+## 다른 저장소에 붙이는 방법
 
-봇은 먼저 `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, PR 템플릿을 읽고 팀 규칙을 자동 적용합니다.
-문서 안에 브랜치 규칙, 커밋 메시지 규칙, PR 제목 규칙, 검증 명령이 적혀 있으면 그 값을 우선 사용합니다.
-문서 안에 protected paths나 수정 금지 경로가 적혀 있으면 실제 차단 경로에도 반영합니다.
-문서 안에 required context나 required secrets가 적혀 있으면 누락 시 작업을 중단하고, 해당 문서와 secret 키도 자동 반영합니다.
-아래 템플릿 필드는 그런 문서 규칙이 없을 때만 fallback으로 사용합니다.
+상세 절차는 아래 문서를 본다.
+
+- `docs/INSTALL.md`
+- `docs/OPERATIONS.md`
+
+바로 시작하려면 아래 템플릿을 복사해서 대상 저장소에 맞게 수정한다.
+
+- `templates/.issue-to-pr-bot.yml.example`
+- `templates/issue-comment.yml.example`
+- `templates/AGENTS.md.example`
+
+## 대상 저장소에 필요한 것
+
+### GitHub App
+
+Repository permissions:
+
+- `Contents`: Read and write
+- `Issues`: Read and write
+- `Pull requests`: Read and write
+- `Metadata`: Read-only
+- `Workflows`: Read and write
+
+Event subscriptions:
+
+- `Issue comment`
+
+등록 값:
+
+- Repository variable: `BOT_APP_ID`
+- Repository secret: `BOT_APP_PRIVATE_KEY`
+
+### Runner
+
+권장 환경:
+
+- Windows self-hosted runner
+- Docker 설치
+- Git 설치
+- Codex CLI 인증 완료
+
+권장 변수:
+
+- `CODEX_HOME_HOST`
+- `BOT_CONTEXT_DIR_HOST`
+- `BOT_SECRETS_FILE_HOST`
+
+## 설정 파일
+
+기본 예시:
 
 ```yaml
 bot:
@@ -65,104 +119,116 @@ bot:
   status_command: "/bot status"
   mention: "@incle-issue-to-pr-bot"
   provider: "codex"
-  branch_prefix: "bot"
-  branch_name_template: "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
-  pr_title_template: "[bot] Issue #{issue_number}: {issue_title}"
-  codex_commit_message_template: "feat: issue #{issue_number} Codex 작업 반영"
-  test_commit_message_template: "chore: issue #{issue_number} 작업 기록"
-  output_dir: "bot-output"
-  test_command: "python -m unittest discover -s tests"
+  mode: "codex"
   check_commands:
     - "python -m compileall -q app tests"
     - "python -m unittest discover -s tests"
-  external_context_paths:
-    - "product"
-  required_context_paths:
-    - "README.md"
-    - "external:product/domain.md"
-  secret_env_keys:
-    - "DB_URL"
-  required_secret_env:
-    - "DB_URL"
-  mode: "codex"
 ```
 
-`external:` 접두사는 runner가 마운트한 외부 context 디렉터리 기준 경로를 뜻합니다.
+주요 설정:
 
-기본 명령:
+- `provider`
+- `mode`
+- `check_commands`
+- `branch_name_template`
+- `pr_title_template`
+- `codex_commit_message_template`
+- `context_paths`
+- `external_context_paths`
+- `required_context_paths`
+- `secret_env_keys`
+- `required_secret_env`
+- `protected_paths`
+
+## 문서 기반 자동 적용
+
+봇은 먼저 아래 문서를 읽는다.
+
+- `AGENTS.md`
+- `CONTRIBUTING.md`
+- `README.md`
+- `.github/pull_request_template.md`
+- `.github/ISSUE_TEMPLATE`
+- `.editorconfig`
+- `pyproject.toml`
+- `package.json`
+
+문서에서 자동 추론하는 항목:
+
+- 브랜치명 규칙
+- 커밋 메시지 규칙
+- PR 제목 규칙
+- 검증 명령
+- protected paths
+- required context
+- required secrets
+
+문서에 없을 때만 `.issue-to-pr-bot.yml` 값이 fallback으로 사용된다.
+
+## 댓글 명령
 
 - `/bot run`
 - `/bot plan`
 - `/bot help`
 - `/bot status`
-- `@incle-issue-to-pr-bot run ...`
-- `@incle-issue-to-pr-bot plan ...`
-- `@incle-issue-to-pr-bot status`
+- `@incle-issue-to-pr-bot ...`
 
-댓글 옵션:
+지원 옵션:
 
 - `mode=codex|test-pr`
 - `provider=codex`
 - `verify=true|false`
 - `effort=low|medium|high|xhigh`
 
-네이밍 템플릿에서 사용할 수 있는 주요 placeholder:
+예시:
 
-- `{issue_number}`
-- `{issue_title}`
-- `{slug}`
-- `{comment_id}`
-- `{comment_suffix}`
-- `{branch_prefix}`
-- `{repository}`
-- `{comment_author}`
+```text
+/bot run effort=high README에 로컬 실행 방법 추가
+@incle-issue-to-pr-bot verify=false mode=test-pr 브랜치와 PR만 생성해줘
+/bot plan DB 마이그레이션 작업 계획
+```
 
-## 🧾 PR 템플릿
+## 첨부 링크 처리
 
-봇은 `.github/pull_request_template.md`를 읽어서 PR 본문을 생성합니다.
+이슈 본문과 댓글의 링크를 수집한다.
 
-사용 가능한 placeholder:
+- 텍스트 파일: 내용 일부와 요약을 프롬프트에 포함
+- HTML 링크: 본문 텍스트 추출 후 컨텍스트로 사용
+- 이미지 / PDF: 파일 경로와 종류를 전달
+- 실패한 링크: 스킵 이유까지 기록
 
-- `{{ISSUE_NUMBER}}`
-- `{{ISSUE_TITLE}}`
-- `{{CHANGED_FILES}}`
-- `{{VERIFICATION_COMMANDS}}`
-- `{{TRIGGER_COMMAND}}`
-- `{{BOT_MODE}}`
+## 보안 원칙
 
-## 🔐 외부 문서와 secret 전달
+- main 직접 수정 금지
+- protected path 수정 차단
+- secret 값은 프롬프트에 넣지 않음
+- secret key 이름만 노출
+- 외부 context와 secret env는 read-only mount
+- GitHub App token으로 PR 생성
 
-외부 문서와 도메인 자료는 self-hosted runner 호스트의 디렉터리를 read-only로 마운트해서 전달합니다.
+## Provider 구조
 
-- GitHub Actions variable `BOT_CONTEXT_DIR_HOST`
-  - 예: `C:\bot-context\issue-to-pr-bot`
-- 컨테이너 내부 경로
-  - `/run/external-context`
-- `.issue-to-pr-bot.yml`의 `external_context_paths`와 `required_context_paths`로 읽을 문서를 제어
+현재 지원 provider:
 
-비밀 정보는 env 파일을 read-only로 마운트해서 전달합니다.
+- `codex`
 
-- GitHub Actions variable `BOT_SECRETS_FILE_HOST`
-  - 예: `C:\bot-secrets\issue-to-pr-bot.env`
-- 컨테이너 내부 경로
-  - `/run/bot-secrets/secrets.env`
-- `.issue-to-pr-bot.yml`의 `secret_env_keys`로 Codex에 “사용 가능한 키 이름만” 알림
-- 실제 값은 프롬프트에 넣지 않음
-- `required_secret_env`에 지정한 키가 없으면 작업을 중단하고 이슈 댓글로 실패를 남김
+구조는 이미 provider registry 기반으로 분리되어 있다.
 
-## 📎 첨부 링크 처리
+- `app/llm_provider.py`
+- `app/codex_provider.py`
 
-이슈 본문과 댓글에 포함된 링크를 최대 일부까지 수집합니다.
+다음 provider를 추가할 때는 새 provider 실행기와 registry 등록만 넣으면 된다.
 
-- 텍스트 첨부(`.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.csv`, `.sql`, `.toml`, `.ini`, `.cfg`, `.html` 등)는 내용 일부와 요약을 프롬프트에 포함
-- HTML 링크는 본문 텍스트를 추출해서 컨텍스트로 사용
-- 이미지와 PDF는 파일 경로와 종류를 프롬프트에 포함
-- 다운로드 실패나 지원하지 않는 형식은 스킵 이유와 함께 기록
+## 운영 순서
 
-## 📌 향후 확장 계획
+1. `/bot status`
+2. `/bot plan`
+3. `/bot run`
+4. PR 리뷰
 
-- PR 리뷰 코멘트 자동 반영
-- 멀티 LLM 구조 (Claude + Codex)
-- 테스트 자동 실행 및 검증
-- 변경 코드(diff) 분석 기능
-- 조건부 자동 merge 기능
+## 저장소 문서
+
+- `docs/INSTALL.md`: 다른 저장소 설치 절차
+- `docs/OPERATIONS.md`: 운영 체크리스트와 실패 유형
+- `templates/`: 복사용 템플릿
+

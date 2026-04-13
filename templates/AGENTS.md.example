@@ -1,0 +1,37 @@
+# Repository Agent Guide
+
+## Working Rules
+
+- Keep changes focused on the issue that triggered the run.
+- Read `.issue-to-pr-bot.yml`, `CONTRIBUTING.md`, `README.md`, and templates before implementing.
+- If required context is missing, stop instead of guessing.
+- Do not commit secrets, tokens, private keys, or local caches.
+
+## Automation Conventions
+
+- Branch format: `bot/{issue_number}{comment_suffix}-{slug}`
+- Commit format: `feat(issue-{issue_number}): {issue_title}`
+- PR title format: `[bot] #{issue_number} {issue_title}`
+
+## Verification
+
+```powershell
+python -m compileall -q app tests
+python -m unittest discover -s tests
+```
+
+## Protected Paths
+
+- `.github/workflows/**`
+- `.env`
+- `.env.*`
+- `*.pem`
+- `*.key`
+
+## Required Context
+
+- `README.md`
+
+## Required Secrets
+
+- `DB_URL`
