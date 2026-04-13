@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from app.bot import BotCommand
-from app.codex_runner import build_codex_command, get_effort
+from app.codex_provider import build_codex_command, get_effort
 
 
 class CodexRunnerTest(unittest.TestCase):

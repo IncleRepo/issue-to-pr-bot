@@ -39,6 +39,7 @@ class BotConfig:
     help_command: str = "/bot help"
     status_command: str = "/bot status"
     mention: str = "@incle-issue-to-pr-bot"
+    provider: str = "codex"
     branch_prefix: str = "bot"
     branch_name_template: str = "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
     pr_title_template: str = "[bot] Issue #{issue_number}: {issue_title}"
@@ -69,6 +70,7 @@ def load_config(workspace: Path) -> BotConfig:
         help_command=values.get("help_command", defaults.help_command),
         status_command=values.get("status_command", defaults.status_command),
         mention=values.get("mention", defaults.mention),
+        provider=values.get("provider", defaults.provider),
         branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
         branch_name_template=values.get("branch_name_template", defaults.branch_name_template),
         pr_title_template=values.get("pr_title_template", defaults.pr_title_template),

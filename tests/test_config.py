@@ -15,6 +15,7 @@ bot:
   help_command: "/ai help"
   status_command: "/ai status"
   mention: "@agent-bot"
+  provider: "codex"
   branch_prefix: "agent"
   branch_name_template: "work/{issue_number}-{slug}"
   pr_title_template: "bot/#{issue_number} {issue_title}"
@@ -48,6 +49,7 @@ bot:
         self.assertEqual(values["help_command"], "/ai help")
         self.assertEqual(values["status_command"], "/ai status")
         self.assertEqual(values["mention"], "@agent-bot")
+        self.assertEqual(values["provider"], "codex")
         self.assertEqual(values["branch_prefix"], "agent")
         self.assertEqual(values["branch_name_template"], "work/{issue_number}-{slug}")
         self.assertEqual(values["pr_title_template"], "bot/#{issue_number} {issue_title}")
@@ -93,6 +95,7 @@ bot:
         self.assertEqual(config.help_command, "/bot help")
         self.assertEqual(config.status_command, "/bot status")
         self.assertEqual(config.mention, "@incle-issue-to-pr-bot")
+        self.assertEqual(config.provider, "codex")
         self.assertEqual(config.branch_prefix, "agent")
         self.assertEqual(config.branch_name_template, "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}")
         self.assertEqual(config.output_dir, "bot-output")

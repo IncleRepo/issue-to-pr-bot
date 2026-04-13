@@ -128,12 +128,16 @@ def resolve_runtime_options(command: BotCommand, config: BotConfig) -> BotRuntim
     if command.action == "plan" and mode != "codex":
         raise ValueError("plan 명령은 mode=codex 에서만 지원됩니다.")
 
-    default_provider = "codex" if mode == "codex" else "builtin"
+    default_provider = config.provider.strip().lower() if mode == "codex" else "builtin"
     provider = command.options.get("provider", default_provider).strip().lower()
-    if provider not in {"codex", "builtin"}:
-        raise ValueError(f"지원하지 않는 provider 값입니다: {provider}")
     if mode != "codex" and "provider" in command.options:
         raise ValueError("provider 옵션은 mode=codex 일 때만 사용할 수 있습니다.")
+    if mode == "codex":
+        from app.llm_provider import ensure_supported_provider
+
+        ensure_supported_provider(provider)
+    elif provider != "builtin":
+        raise ValueError(f"지원하지 않는 provider 값입니다: {provider}")
 
     verify = parse_bool_option(command.options.get("verify"), default=True)
     if command.action == "plan":

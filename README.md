@@ -64,6 +64,7 @@ bot:
   help_command: "/bot help"
   status_command: "/bot status"
   mention: "@incle-issue-to-pr-bot"
+  provider: "codex"
   branch_prefix: "bot"
   branch_name_template: "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
   pr_title_template: "[bot] Issue #{issue_number}: {issue_title}"
