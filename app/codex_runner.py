@@ -1,13 +1,11 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.attachments import collect_attachment_context, format_attachment_context
-from app.bot import BotCommand, BotRuntimeOptions, IssueRequest, build_codex_commit_message, build_plan_prompt, build_task_prompt
+from app.bot import BotCommand, BotRuntimeOptions, IssueRequest, build_codex_commit_message
 from app.config import BotConfig
-from app.github_pr import PullRequestResult, checkout_bot_branch, commit_push_and_open_pr
+from app.github_pr import PullRequestResult, checkout_request_target, commit_push_and_open_pr, sync_pull_request_branch_with_base
 from app.llm_provider import ProviderExecutionRequest, build_plan_output_path, run_provider_request
-from app.repo_context import collect_context_documents, collect_project_summary, format_context_documents
-from app.runtime_secrets import load_runtime_secrets
+from app.prompting import PreparedPrompt, prepare_prompt
 from app.verification import run_verification
 
 
@@ -22,11 +20,20 @@ def create_codex_pr(
     config: BotConfig,
     command: BotCommand | None = None,
     runtime_options: BotRuntimeOptions | None = None,
+    prepared_prompt: PreparedPrompt | None = None,
 ) -> PullRequestResult:
     runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=True)
-    branch_name = checkout_bot_branch(request, workspace, config)
+    target = checkout_request_target(request, workspace, config)
+    if request.is_pull_request and runtime_options.sync_base:
+        sync_result = sync_pull_request_branch_with_base(workspace, target.base_branch)
+        if sync_result.up_to_date:
+            print(f"PR branch is already up to date with {target.base_branch}.")
+        elif sync_result.has_conflicts:
+            print(f"PR branch now has merge conflicts against {target.base_branch}. Codex will resolve them in-place.")
+        else:
+            print(f"PR branch synced with {target.base_branch} before Codex execution.")
 
-    run_codex(request, workspace, config, command, runtime_options)
+    run_codex(request, workspace, config, command, runtime_options, prepared_prompt)
     if runtime_options.verify:
         run_verification(config, workspace)
 
@@ -34,7 +41,8 @@ def create_codex_pr(
         request=request,
         workspace=workspace,
         config=config,
-        branch_name=branch_name,
+        branch_name=target.branch_name,
+        base_branch=target.base_branch,
         commit_message=build_codex_commit_message(request, config),
     )
 
@@ -45,28 +53,23 @@ def run_codex(
     config: BotConfig,
     bot_command: BotCommand | None = None,
     runtime_options: BotRuntimeOptions | None = None,
+    prepared_prompt: PreparedPrompt | None = None,
 ) -> CodexRunResult:
     runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=True)
-    available_secret_keys = load_runtime_secrets(config)
-    attachment_context = format_attachment_context(collect_attachment_context(request))
-    documents = collect_context_documents(workspace, config)
-    repository_context = format_context_documents(documents)
-    project_summary = collect_project_summary(workspace)
-    prompt = build_task_prompt(
-        request,
-        config,
-        repository_context,
-        project_summary,
-        available_secret_keys,
-        attachment_context,
-    )
+    prepared_prompt = prepared_prompt or prepare_prompt(request, workspace, config, action="run")
 
-    print(f"저장소 규칙 문서 {len(documents)}개를 프롬프트에 포함합니다.")
-    print(f"{runtime_options.provider} 실행 시작")
+    print(
+        "Prompt metrics: "
+        f"chars={prepared_prompt.metrics.prompt_chars}, "
+        f"context_docs={prepared_prompt.metrics.selected_document_count}/{prepared_prompt.metrics.document_count}, "
+        f"attachments={prepared_prompt.metrics.attachment_count}, "
+        f"collection={prepared_prompt.metrics.collection_seconds:.2f}s"
+    )
+    print(f"{runtime_options.provider} execution started")
     result = run_provider_request(
         ProviderExecutionRequest(
             workspace=workspace,
-            prompt=prompt,
+            prompt=prepared_prompt.prompt,
             runtime_options=runtime_options,
             bot_command=bot_command,
         )
@@ -80,29 +83,24 @@ def run_codex_plan(
     config: BotConfig,
     bot_command: BotCommand | None = None,
     runtime_options: BotRuntimeOptions | None = None,
+    prepared_prompt: PreparedPrompt | None = None,
 ) -> CodexRunResult:
     runtime_options = runtime_options or BotRuntimeOptions(mode="codex", provider="codex", verify=False)
-    available_secret_keys = load_runtime_secrets(config)
-    attachment_context = format_attachment_context(collect_attachment_context(request))
-    documents = collect_context_documents(workspace, config)
-    repository_context = format_context_documents(documents)
-    project_summary = collect_project_summary(workspace)
-    prompt = build_plan_prompt(
-        request,
-        config,
-        repository_context,
-        project_summary,
-        available_secret_keys,
-        attachment_context,
-    )
+    prepared_prompt = prepared_prompt or prepare_prompt(request, workspace, config, action="plan")
     output_path = build_plan_output_path()
 
-    print(f"저장소 규칙 문서 {len(documents)}개를 계획 프롬프트에 포함합니다.")
-    print(f"{runtime_options.provider} 계획 생성 시작")
+    print(
+        "Plan prompt metrics: "
+        f"chars={prepared_prompt.metrics.prompt_chars}, "
+        f"context_docs={prepared_prompt.metrics.selected_document_count}/{prepared_prompt.metrics.document_count}, "
+        f"attachments={prepared_prompt.metrics.attachment_count}, "
+        f"collection={prepared_prompt.metrics.collection_seconds:.2f}s"
+    )
+    print(f"{runtime_options.provider} plan generation started")
     result = run_provider_request(
         ProviderExecutionRequest(
             workspace=workspace,
-            prompt=prompt,
+            prompt=prepared_prompt.prompt,
             runtime_options=runtime_options,
             bot_command=bot_command,
             output_last_message=output_path,

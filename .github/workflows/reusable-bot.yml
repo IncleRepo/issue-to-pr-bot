@@ -109,6 +109,7 @@ jobs:
             "-e", "GITHUB_REF_NAME=${env:GITHUB_REF_NAME}",
             "-e", "GITHUB_TOKEN=${env:GITHUB_TOKEN}",
             "-e", "BOT_GITHUB_TOKEN=${env:BOT_GITHUB_TOKEN}",
+            "-e", "BOT_MENTION=${env:BOT_MENTION}",
             "-e", "BOT_RESET_WORKTREE=1",
             "-e", "BOT_EXTERNAL_CONTEXT_DIR=/run/external-context",
             "-e", "BOT_SECRETS_FILE=/run/bot-secrets/secrets.env",
@@ -143,6 +144,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BOT_GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          BOT_MENTION: ${{ vars.BOT_MENTION }}
           CODEX_HOME_HOST: ${{ vars.CODEX_HOME_HOST }}
           BOT_CONTEXT_DIR_HOST: ${{ vars.BOT_CONTEXT_DIR_HOST }}
           BOT_SECRETS_FILE_HOST: ${{ vars.BOT_SECRETS_FILE_HOST }}

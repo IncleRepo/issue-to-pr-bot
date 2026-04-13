@@ -18,6 +18,9 @@ from app.bot import (
 )
 from app.config import BotConfig, get_check_commands, load_config
 
+BOT_PR_MARKER = "<!-- incle-issue-to-pr-bot -->"
+BOT_AUTO_MERGE_MARKER = "<!-- incle-issue-to-pr-bot:auto-merge -->"
+
 
 @dataclass(frozen=True)
 class PullRequestResult:
@@ -27,31 +30,134 @@ class PullRequestResult:
     changed_files: list[str]
 
 
+@dataclass(frozen=True)
+class CheckoutTarget:
+    branch_name: str
+    base_branch: str
+    pull_request_number: int | None = None
+    pull_request_url: str | None = None
+
+
+@dataclass(frozen=True)
+class BaseSyncResult:
+    attempted: bool
+    up_to_date: bool = False
+    has_conflicts: bool = False
+
+
+@dataclass(frozen=True)
+class MergeRequestResult:
+    pull_request_url: str | None
+    requested: bool
+    merged: bool
+    merge_sha: str | None = None
+
+
 def create_test_pr(
     request: IssueRequest,
     workspace: Path,
     config: BotConfig | None = None,
 ) -> PullRequestResult:
     config = config or load_config(workspace)
-    branch_name = checkout_bot_branch(request, workspace, config)
+    target = checkout_request_target(request, workspace, config)
 
     write_marker_file(request, workspace, config)
     return commit_push_and_open_pr(
         request=request,
         workspace=workspace,
         config=config,
-        branch_name=branch_name,
+        branch_name=target.branch_name,
+        base_branch=target.base_branch,
         commit_message=build_test_commit_message(request, config),
         add_paths=[config.output_dir],
     )
 
 
-def checkout_bot_branch(request: IssueRequest, workspace: Path, config: BotConfig) -> str:
+def checkout_request_target(request: IssueRequest, workspace: Path, config: BotConfig) -> CheckoutTarget:
+    if request.is_pull_request:
+        return checkout_pull_request_branch(request, workspace)
+    return checkout_issue_branch(request, workspace, config)
+
+
+def checkout_issue_branch(request: IssueRequest, workspace: Path, config: BotConfig) -> CheckoutTarget:
     branch_name = build_branch_name(request, config)
     configure_git(workspace)
     run_git(["checkout", "-B", branch_name], workspace)
     reset_worktree_if_requested(workspace)
-    return branch_name
+    return CheckoutTarget(
+        branch_name=branch_name,
+        base_branch=os.getenv("GITHUB_REF_NAME") or "main",
+    )
+
+
+def checkout_pull_request_branch(request: IssueRequest, workspace: Path) -> CheckoutTarget:
+    repository = os.getenv("GITHUB_REPOSITORY") or request.repository
+    token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("PR 브랜치를 조회하려면 GitHub token이 필요합니다.")
+    if not request.pull_request_number:
+        raise RuntimeError("PR 번호를 찾을 수 없어 PR 브랜치를 체크아웃할 수 없습니다.")
+
+    pull_request = get_pull_request(repository, request.pull_request_number, token)
+    head_ref = pull_request["head"]["ref"]
+    head_repo = (pull_request["head"].get("repo") or {}).get("full_name") or repository
+    base_ref = pull_request["base"]["ref"]
+    html_url = pull_request["html_url"]
+
+    if head_repo != repository:
+        raise RuntimeError("fork PR 브랜치 자동 수정은 아직 지원하지 않습니다.")
+
+    configure_git(workspace)
+    run_git(["fetch", "origin", head_ref], workspace)
+    run_git(["checkout", "-B", head_ref, "FETCH_HEAD"], workspace)
+    reset_worktree_if_requested(workspace)
+    return CheckoutTarget(
+        branch_name=head_ref,
+        base_branch=base_ref,
+        pull_request_number=int(pull_request["number"]),
+        pull_request_url=html_url,
+    )
+
+
+def sync_pull_request_branch_with_base(workspace: Path, base_branch: str) -> BaseSyncResult:
+    configure_git(workspace)
+    run_git(["fetch", "origin", base_branch], workspace)
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "merge",
+            "--no-ff",
+            "--no-commit",
+            f"origin/{base_branch}",
+        ],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if (result.stdout or "").strip():
+        print((result.stdout or "").rstrip())
+    output = (result.stdout or "").lower()
+
+    if result.returncode == 0:
+        return BaseSyncResult(
+            attempted=True,
+            up_to_date="already up to date" in output,
+            has_conflicts=False,
+        )
+
+    if has_unmerged_paths(workspace):
+        print("Base branch sync produced merge conflicts. Leaving the worktree in conflict state for Codex.")
+        return BaseSyncResult(attempted=True, has_conflicts=True)
+
+    raise RuntimeError(
+        f"Base branch sync failed before Codex could continue: origin/{base_branch}"
+    )
 
 
 def reset_worktree_if_requested(workspace: Path) -> None:
@@ -68,6 +174,7 @@ def commit_push_and_open_pr(
     workspace: Path,
     config: BotConfig,
     branch_name: str,
+    base_branch: str,
     commit_message: str,
     add_paths: list[str] | None = None,
 ) -> PullRequestResult:
@@ -76,7 +183,6 @@ def commit_push_and_open_pr(
         raise RuntimeError("BOT_GITHUB_TOKEN 또는 GITHUB_TOKEN이 없어 PR을 생성할 수 없습니다.")
 
     repository = os.getenv("GITHUB_REPOSITORY") or request.repository
-    base_branch = os.getenv("GITHUB_REF_NAME") or "main"
 
     print("변경 파일 확인:")
     run_git(["status", "--short"], workspace)
@@ -181,6 +287,27 @@ def has_staged_changes(workspace: Path) -> bool:
     return result.returncode != 0
 
 
+def has_unmerged_paths(workspace: Path) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "diff",
+            "--name-only",
+            "--diff-filter=U",
+        ],
+        cwd=workspace,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return bool((result.stdout or "").strip())
+
+
 def get_staged_files(workspace: Path) -> list[str]:
     result = subprocess.run(
         [
@@ -265,6 +392,80 @@ def ensure_pull_request(
     return response["html_url"]
 
 
+def get_pull_request(repository: str, pull_request_number: int, token: str):
+    return github_request("GET", f"/repos/{repository}/pulls/{pull_request_number}", token)
+
+
+def is_bot_pull_request(pull_request: dict) -> bool:
+    body = pull_request.get("body") or ""
+    return BOT_PR_MARKER in body
+
+
+def is_auto_merge_requested(pull_request: dict) -> bool:
+    body = pull_request.get("body") or ""
+    return BOT_AUTO_MERGE_MARKER in body
+
+
+def request_pull_request_merge(repository: str, pull_request_number: int, token: str) -> MergeRequestResult:
+    pull_request = get_pull_request(repository, pull_request_number, token)
+    if not is_bot_pull_request(pull_request):
+        raise RuntimeError("봇이 만든 PR에 대해서만 merge 요청을 등록할 수 있습니다.")
+
+    body = pull_request.get("body") or ""
+    if BOT_AUTO_MERGE_MARKER not in body:
+        updated_body = body.rstrip()
+        if updated_body:
+            updated_body += "\n\n"
+        updated_body += BOT_AUTO_MERGE_MARKER
+        pull_request = github_request(
+            "PATCH",
+            f"/repos/{repository}/pulls/{pull_request_number}",
+            token,
+            {"body": updated_body},
+        )
+
+    merge_sha = try_auto_merge_pull_request(repository, pull_request_number, token)
+    return MergeRequestResult(
+        pull_request_url=pull_request.get("html_url"),
+        requested=True,
+        merged=bool(merge_sha),
+        merge_sha=merge_sha,
+    )
+
+
+def try_requested_auto_merge_pull_request(repository: str, pull_request_number: int, token: str) -> str | None:
+    pull_request = get_pull_request(repository, pull_request_number, token)
+    if not is_auto_merge_requested(pull_request):
+        print("auto-merge 요청이 등록되지 않아 merge를 건너뜁니다.")
+        return None
+    return try_auto_merge_pull_request(repository, pull_request_number, token)
+
+
+def try_auto_merge_pull_request(repository: str, pull_request_number: int, token: str) -> str | None:
+    pull_request = get_pull_request(repository, pull_request_number, token)
+    if not is_bot_pull_request(pull_request):
+        print("봇이 만든 PR이 아니라서 auto-merge를 건너뜁니다.")
+        return None
+
+    if pull_request.get("state") != "open":
+        print("열린 PR이 아니라서 auto-merge를 건너뜁니다.")
+        return None
+
+    payload = {
+        "merge_method": "squash",
+    }
+    try:
+        response = github_request("PUT", f"/repos/{repository}/pulls/{pull_request_number}/merge", token, payload)
+    except RuntimeError as error:
+        message = str(error).lower()
+        if any(keyword in message for keyword in ("review", "required", "merge", "405", "409")):
+            print(f"아직 auto-merge 조건이 충족되지 않았습니다: {error}")
+            return None
+        raise
+
+    return response.get("sha")
+
+
 def find_existing_pull_request(
     repository: str,
     branch_name: str,
@@ -299,7 +500,7 @@ def build_pull_request_body(
     replacements = {
         "{{ISSUE_NUMBER}}": str(request.issue_number),
         "{{ISSUE_TITLE}}": request.issue_title,
-        "{{TRIGGER_COMMAND}}": config.command,
+        "{{TRIGGER_COMMAND}}": request.comment_body.strip(),
         "{{BOT_MODE}}": config.mode,
         "{{CHANGED_FILES}}": format_pull_request_changed_files(changed_files),
         "{{VERIFICATION_COMMANDS}}": format_pull_request_verification_commands(config),
@@ -308,6 +509,8 @@ def build_pull_request_body(
         rendered = rendered.replace(placeholder, value)
 
     rendered = re.sub(r"Closes #(?=\s|$)", f"Closes #{request.issue_number}", rendered)
+    if BOT_PR_MARKER not in rendered:
+        rendered = rendered.rstrip() + "\n\n" + BOT_PR_MARKER
     return rendered.strip()
 
 
@@ -357,8 +560,10 @@ def build_default_pull_request_body(
             "",
             "## Notes",
             "",
-            f"- Trigger command: `{config.command}`",
+            f"- Trigger comment: `{request.comment_body.strip()}`",
             f"- Bot mode: `{config.mode}`",
+            "",
+            BOT_PR_MARKER,
         ]
     ).strip()
 

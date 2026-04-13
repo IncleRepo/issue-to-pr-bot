@@ -1,0 +1,49 @@
+import unittest
+from unittest.mock import patch
+
+from app.auto_merge import handle_pull_request_review_event
+from app.github_pr import BOT_AUTO_MERGE_MARKER, BOT_PR_MARKER, is_bot_pull_request, try_auto_merge_pull_request
+
+
+class AutoMergeTest(unittest.TestCase):
+    def test_is_bot_pull_request_requires_marker(self) -> None:
+        self.assertTrue(is_bot_pull_request({"body": f"hello\n{BOT_PR_MARKER}"}))
+        self.assertFalse(is_bot_pull_request({"body": "hello"}))
+
+    @patch("app.github_pr.github_request")
+    def test_try_auto_merge_pull_request_merges_when_marker_exists(self, github_request_mock) -> None:
+        github_request_mock.side_effect = [
+            {"number": 3, "state": "open", "body": f"{BOT_PR_MARKER}\n{BOT_AUTO_MERGE_MARKER}"},
+            {"sha": "abc123"},
+        ]
+
+        sha = try_auto_merge_pull_request("IncleRepo/issue-to-pr-bot", 3, "token")
+
+        self.assertEqual(sha, "abc123")
+
+    @patch("app.github_pr.github_request")
+    def test_try_auto_merge_pull_request_skips_non_bot_pr(self, github_request_mock) -> None:
+        github_request_mock.return_value = {"number": 3, "state": "open", "body": "human"}
+
+        sha = try_auto_merge_pull_request("IncleRepo/issue-to-pr-bot", 3, "token")
+
+        self.assertIsNone(sha)
+
+    @patch("app.auto_merge.create_issue_comment")
+    @patch("app.auto_merge.try_requested_auto_merge_pull_request")
+    def test_handle_pull_request_review_event_comments_after_merge(self, try_merge_mock, create_comment_mock) -> None:
+        try_merge_mock.return_value = "abc123"
+        payload = {
+            "repository": {"full_name": "IncleRepo/issue-to-pr-bot"},
+            "review": {"state": "approved"},
+            "pull_request": {"number": 7},
+        }
+
+        with patch.dict("os.environ", {"BOT_GITHUB_TOKEN": "token"}, clear=True):
+            handle_pull_request_review_event(payload)
+
+        create_comment_mock.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

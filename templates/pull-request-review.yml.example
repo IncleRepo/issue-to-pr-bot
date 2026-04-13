@@ -1,0 +1,29 @@
+name: pull-request-review-bot
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  auto-merge-bot-pr:
+    if: >
+      (
+        github.event.review.author_association == 'OWNER' ||
+        github.event.review.author_association == 'MEMBER' ||
+        github.event.review.author_association == 'COLLABORATOR'
+      ) &&
+      (
+        github.event.review.state == 'approved' ||
+        (vars.BOT_MENTION != '' && contains(github.event.review.body, vars.BOT_MENTION))
+      )
+    uses: IncleRepo/issue-to-pr-bot/.github/workflows/reusable-bot.yml@main
+    secrets: inherit
+    with:
+      runner_labels_json: '["self-hosted","Windows"]'
+      engine_repository: "IncleRepo/issue-to-pr-bot"
+      engine_ref: "main"

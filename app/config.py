@@ -1,9 +1,11 @@
+import os
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 
 
 CONFIG_FILE = ".issue-to-pr-bot.yml"
+BOT_MENTION = os.getenv("BOT_MENTION", "@incle-issue-to-pr-bot")
 
 
 DEFAULT_CONTEXT_PATHS = [
@@ -34,11 +36,6 @@ DEFAULT_PROTECTED_PATHS = [
 
 @dataclass(frozen=True)
 class BotConfig:
-    command: str = "/bot run"
-    plan_command: str = "/bot plan"
-    help_command: str = "/bot help"
-    status_command: str = "/bot status"
-    mention: str = "@incle-issue-to-pr-bot"
     provider: str = "codex"
     branch_prefix: str = "bot"
     branch_name_template: str = "{branch_prefix}/issue-{issue_number}{comment_suffix}-{slug}"
@@ -48,7 +45,7 @@ class BotConfig:
     output_dir: str = "bot-output"
     test_command: str = "python -m unittest discover -s tests"
     check_commands: list[str] = field(default_factory=list)
-    mode: str = "test-pr"
+    mode: str = "codex"
     context_paths: list[str] = field(default_factory=lambda: DEFAULT_CONTEXT_PATHS.copy())
     external_context_paths: list[str] = field(default_factory=list)
     required_context_paths: list[str] = field(default_factory=list)
@@ -65,42 +62,7 @@ def load_config(workspace: Path) -> BotConfig:
     defaults = BotConfig()
     values = parse_simple_bot_config(config_path.read_text(encoding="utf-8-sig"))
     return BotConfig(
-        command=values.get("command", defaults.command),
-        plan_command=values.get("plan_command", defaults.plan_command),
-        help_command=values.get("help_command", defaults.help_command),
-        status_command=values.get("status_command", defaults.status_command),
-        mention=values.get("mention", defaults.mention),
-        provider=values.get("provider", defaults.provider),
-        branch_prefix=values.get("branch_prefix", defaults.branch_prefix),
-        branch_name_template=values.get("branch_name_template", defaults.branch_name_template),
-        pr_title_template=values.get("pr_title_template", defaults.pr_title_template),
-        codex_commit_message_template=values.get(
-            "codex_commit_message_template",
-            defaults.codex_commit_message_template,
-        ),
-        test_commit_message_template=values.get(
-            "test_commit_message_template",
-            defaults.test_commit_message_template,
-        ),
         output_dir=values.get("output_dir", defaults.output_dir),
-        test_command=values.get("test_command", defaults.test_command),
-        check_commands=as_string_list(values.get("check_commands"), defaults.check_commands),
-        mode=values.get("mode", defaults.mode),
-        context_paths=as_string_list(values.get("context_paths"), defaults.context_paths),
-        external_context_paths=as_string_list(
-            values.get("external_context_paths"),
-            defaults.external_context_paths,
-        ),
-        required_context_paths=as_string_list(
-            values.get("required_context_paths"),
-            defaults.required_context_paths,
-        ),
-        secret_env_keys=as_string_list(values.get("secret_env_keys"), defaults.secret_env_keys),
-        required_secret_env=as_string_list(
-            values.get("required_secret_env"),
-            defaults.required_secret_env,
-        ),
-        protected_paths=as_string_list(values.get("protected_paths"), defaults.protected_paths),
     )
 
 

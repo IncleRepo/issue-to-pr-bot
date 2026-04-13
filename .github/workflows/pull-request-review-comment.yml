@@ -1,7 +1,7 @@
-name: issue-comment-bot
+name: pull-request-review-comment-bot
 
 on:
-  issue_comment:
+  pull_request_review_comment:
     types: [created]
 
 permissions:

@@ -12,7 +12,8 @@ permissions:
 jobs:
   run-bot:
     if: >
-      github.event.issue.pull_request == null &&
+      vars.BOT_MENTION != '' &&
+      contains(github.event.comment.body, vars.BOT_MENTION) &&
       (
         github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'MEMBER' ||
