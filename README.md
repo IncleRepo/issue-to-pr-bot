@@ -52,6 +52,7 @@ app/
   codex_runner.py          # Codex 실행과 PR 생성 연결
   config.py                # 최소 설정과 기본값
   github_pr.py             # git / GitHub API 처리
+  install_manager.py       # 대상 저장소 초기 설치 매니저
   llm_provider.py          # LLM provider 추상화
   prompting.py             # prompt budget, context 선별, 계측
   repo_context.py          # 저장소 문서/구조 수집
@@ -63,6 +64,65 @@ app/
 templates/
 tests/
 ```
+
+## 1-1. 중앙화된 최종 운영 구조
+
+이 프로젝트는 GitHub Actions를 유지하는 한도에서 꽤 강하게 중앙화할 수 있습니다.
+
+권장 최종 구조:
+
+- 중앙 `engine repo`: 이 저장소 하나에 봇 코드, Dockerfile, reusable workflow 유지
+- 중앙 `self-hosted runner` 또는 `runner group`: 여러 저장소가 같은 실행 머신 공유
+- 중앙 `GitHub App`: 권한, App ID, private key 관리
+- 중앙 `organization variables / secrets`: 공통 설정 중앙 관리
+- 대상 저장소: 얇은 workflow caller와 선택 설정만 보유
+
+대상 저장소에 남는 최소 파일:
+
+- `.github/workflows/issue-comment.yml`
+- 선택: `.github/workflows/pull-request-review.yml`
+- 선택: `.github/workflows/pull-request-review-comment.yml`
+- 선택: `.issue-to-pr-bot.yml`
+
+즉 대상 저장소에는 봇 엔진 Python 파일을 둘 필요가 없습니다. workflow가 실행될 때 중앙 `engine repo`를 checkout해서 그 코드를 사용합니다.
+
+## 1-2. 설치 매니저 MVP
+
+이 저장소에는 대상 저장소에 최소 환경을 빠르게 넣기 위한 설치 매니저가 들어 있습니다.
+
+실행 예시:
+
+```powershell
+python -m app.install_manager init --target C:\path\to\target-repo --write-config
+```
+
+리뷰 관련 workflow까지 포함해 중앙 엔진 저장소를 지정하고 싶다면:
+
+```powershell
+python -m app.install_manager init `
+  --target C:\path\to\target-repo `
+  --engine-repository IncleRepo/issue-to-pr-bot `
+  --engine-ref main `
+  --runner-label self-hosted `
+  --runner-label Windows `
+  --write-config
+```
+
+설치 매니저가 하는 일:
+
+- issue comment workflow 생성
+- 선택 시 review workflow 2개 추가 생성
+- 선택 시 최소 `.issue-to-pr-bot.yml` 생성
+- 중앙 engine repo / ref / runner labels 값 반영
+- 기존 파일이 있으면 기본적으로 건드리지 않고, `--force`일 때만 덮어씀
+
+설치 매니저가 하지 않는 일:
+
+- GitHub App 자동 생성
+- repository secret 자동 등록
+- self-hosted runner 자동 설치
+
+즉 설치 매니저는 "대상 저장소 파일 배치"를 자동화하는 MVP이고, GitHub 설정 자체는 사람이 한 번 연결해야 합니다.
 
 ## 2. 사용하는 법: 빈 저장소에서 처음부터 적용하기
 
@@ -206,6 +266,14 @@ cd C:\actions-runner
 .github/workflows/issue-comment.yml
 .github/workflows/pull-request-review.yml
 .github/workflows/pull-request-review-comment.yml
+```
+
+설치 매니저를 쓰면 이 과정을 수동 복사 없이 한 번에 처리할 수 있습니다.
+
+예시:
+
+```powershell
+python -m app.install_manager init --target . --write-config
 ```
 
 ### 2-10. self-hosted runner가 yml에서 어떻게 쓰이는지
@@ -526,3 +594,60 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m compileall -q app tests
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
+
+## 6. 중앙화 운영 가이드
+
+여러 저장소에 이 봇을 적용하려면 아래 구조가 가장 현실적입니다.
+
+1. 중앙 `engine repo`는 한 곳만 유지합니다.
+2. reusable workflow는 중앙 repo에서 버전 관리합니다.
+3. self-hosted runner는 가능하면 organization 단위로 공유합니다.
+4. 대상 저장소에는 설치 매니저로 얇은 workflow만 넣습니다.
+5. 저장소별로 정말 필요한 경우에만 `.issue-to-pr-bot.yml`을 추가합니다.
+
+이 구조의 장점:
+
+- 대상 저장소마다 Python 봇 코드를 복사할 필요가 없음
+- workflow 갱신 지점이 중앙 repo로 모임
+- 설치 실수와 drift를 줄이기 쉬움
+- 새 저장소 온보딩을 거의 "명령 한 번 + GitHub 설정 몇 개" 수준으로 줄일 수 있음
+
+한계:
+
+- GitHub Actions 기반인 이상 대상 저장소에 workflow caller 파일은 최소한 필요
+- GitHub App, secret, runner 준비는 완전 무설정으로 만들 수 없음
+
+완전한 중앙화가 필요하면 장기적으로는 GitHub App webhook 서버형 구조를 별도로 고려해야 합니다.
+
+## 7. 설치 매니저 사용법
+
+가장 단순한 설치:
+
+```powershell
+python -m app.install_manager init --target C:\repo --write-config
+```
+
+issue comment workflow만 최소 설치:
+
+```powershell
+python -m app.install_manager init --target C:\repo --skip-review-workflows
+```
+
+기존 파일을 강제로 다시 생성:
+
+```powershell
+python -m app.install_manager init --target C:\repo --write-config --force
+```
+
+변경 예정 내용만 미리 보기:
+
+```powershell
+python -m app.install_manager init --target C:\repo --write-config --dry-run
+```
+
+설치 후 사람이 확인해야 할 것:
+
+- GitHub App 설치 여부
+- `BOT_MENTION`, `BOT_APP_ID`, `BOT_APP_PRIVATE_KEY` 등록 여부
+- self-hosted runner 실행 상태
+- Codex CLI 로그인 상태
