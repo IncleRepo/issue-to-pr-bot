@@ -177,6 +177,37 @@ class RepoRulesTest(unittest.TestCase):
             ["EXISTING_KEY", "DB_URL", "OPENAI_API_KEY"],
         )
 
+    def test_resolve_bot_config_does_not_treat_tutorial_variables_as_required_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath("README.md").write_text(
+                "\n".join(
+                    [
+                        "# Repo",
+                        "",
+                        "## Repository variables",
+                        "",
+                        "- `BOT_MENTION`",
+                        "- `BOT_APP_ID`",
+                        "",
+                        "## Repository secrets",
+                        "",
+                        "- `BOT_APP_PRIVATE_KEY`",
+                        "",
+                        "## Tutorial",
+                        "",
+                        "- `DB_URL` can be used in examples.",
+                        "- `OPENAI_API_KEY` can be used in examples.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_bot_config(workspace, BotConfig())
+
+        self.assertEqual(resolved.required_secret_env, [])
+        self.assertEqual(resolved.secret_env_keys, [])
+
 
 if __name__ == "__main__":
     unittest.main()

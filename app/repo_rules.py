@@ -210,10 +210,6 @@ def infer_required_context_paths(documents: dict[str, str]) -> list[str]:
                     if path not in paths:
                         paths.append(path)
 
-        for path in infer_context_paths_from_lines(text):
-            if path not in paths:
-                paths.append(path)
-
     return paths
 
 
@@ -230,10 +226,6 @@ def infer_required_secret_env(documents: dict[str, str]) -> list[str]:
                 for key in infer_secret_keys_from_text(section["body"]):
                     if key not in keys:
                         keys.append(key)
-
-        for key in infer_secret_keys_from_lines(text):
-            if key not in keys:
-                keys.append(key)
 
     return keys
 
