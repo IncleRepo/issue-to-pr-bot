@@ -215,11 +215,15 @@ async function mintInstallationToken(installationId, env) {
 
 async function buildAppJwt(appId, privateKeyPem) {
   const now = Math.floor(Date.now() / 1000);
+  const issuer = Number(appId);
+  if (!Number.isInteger(issuer) || issuer <= 0) {
+    throw new Error("GITHUB_APP_ID must be a positive integer.");
+  }
   const header = { alg: "RS256", typ: "JWT" };
   const payload = {
     iat: now - 60,
     exp: now + 540,
-    iss: appId,
+    iss: issuer,
   };
 
   const encodedHeader = base64Url(JSON.stringify(header));
@@ -236,11 +240,23 @@ async function buildAppJwt(appId, privateKeyPem) {
 }
 
 async function importPrivateKey(pem) {
-  const clean = pem
-    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
-    .replace(/-----END PRIVATE KEY-----/g, "")
-    .replace(/\s+/g, "");
-  const der = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  let format = "pkcs8";
+  let clean = pem;
+  if (pem.includes("-----BEGIN RSA PRIVATE KEY-----")) {
+    format = "pkcs1";
+    clean = clean
+      .replace(/-----BEGIN RSA PRIVATE KEY-----/g, "")
+      .replace(/-----END RSA PRIVATE KEY-----/g, "");
+  } else {
+    clean = clean
+      .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+      .replace(/-----END PRIVATE KEY-----/g, "");
+  }
+  clean = clean.replace(/\s+/g, "");
+  let der = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  if (format === "pkcs1") {
+    der = wrapPkcs1InPkcs8(der);
+  }
   return crypto.subtle.importKey(
     "pkcs8",
     der.buffer,
@@ -248,6 +264,46 @@ async function importPrivateKey(pem) {
     false,
     ["sign"],
   );
+}
+
+function wrapPkcs1InPkcs8(pkcs1Bytes) {
+  const version = Uint8Array.from([0x02, 0x01, 0x00]);
+  const algorithmIdentifier = Uint8Array.from([
+    0x30, 0x0d,
+    0x06, 0x09,
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    0x05, 0x00,
+  ]);
+  const privateKey = encodeDerElement(0x04, pkcs1Bytes);
+  return encodeDerElement(0x30, concatBytes(version, algorithmIdentifier, privateKey));
+}
+
+function encodeDerElement(tag, value) {
+  return concatBytes(Uint8Array.from([tag]), encodeDerLength(value.length), value);
+}
+
+function encodeDerLength(length) {
+  if (length < 0x80) {
+    return Uint8Array.from([length]);
+  }
+  const bytes = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining >>= 8;
+  }
+  return Uint8Array.from([0x80 | bytes.length, ...bytes]);
+}
+
+function concatBytes(...parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
 }
 
 function taskKey(taskId) {

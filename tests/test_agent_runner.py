@@ -4,9 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.agent_runner import (
+    AgentConfig,
     clear_pid_file,
     read_running_pid,
     resolve_pid_path,
+    run_agent_loop,
     try_resolve_log_path,
 )
 
@@ -40,3 +42,60 @@ class AgentRunnerTest(unittest.TestCase):
             pid_path.write_text("12345", encoding="utf-8")
             clear_pid_file(config_path)
             self.assertFalse(pid_path.exists())
+
+    @patch("app.agent_runner.clear_pid_file")
+    @patch("app.agent_runner.time.sleep")
+    @patch("app.agent_runner.log_message")
+    @patch("app.agent_runner.claim_task")
+    @patch("app.agent_runner.ensure_single_instance")
+    def test_run_agent_loop_keeps_running_after_claim_error(
+        self,
+        _mock_lock,
+        mock_claim,
+        mock_log,
+        _mock_sleep,
+        mock_clear,
+    ) -> None:
+        config = AgentConfig(
+            control_plane_url="https://example.com",
+            agent_token="token",
+            workspace_root=Path(r"C:\work"),
+            log_path=Path(r"C:\logs\agent.log"),
+        )
+        config_path = Path(r"C:\agent\agent-config.json")
+        mock_claim.side_effect = [RuntimeError("boom"), KeyboardInterrupt()]
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_agent_loop(config, config_path)
+
+        self.assertTrue(any("작업 조회 실패: boom" in call.args[1] for call in mock_log.call_args_list))
+        mock_clear.assert_called_once_with(config_path)
+
+    @patch("app.agent_runner.clear_pid_file")
+    @patch("app.agent_runner.log_message")
+    @patch("app.agent_runner.run_claimed_task")
+    @patch("app.agent_runner.claim_task")
+    @patch("app.agent_runner.ensure_single_instance")
+    def test_run_agent_loop_keeps_running_after_task_error(
+        self,
+        _mock_lock,
+        mock_claim,
+        mock_run_task,
+        mock_log,
+        mock_clear,
+    ) -> None:
+        config = AgentConfig(
+            control_plane_url="https://example.com",
+            agent_token="token",
+            workspace_root=Path(r"C:\work"),
+            log_path=Path(r"C:\logs\agent.log"),
+        )
+        config_path = Path(r"C:\agent\agent-config.json")
+        mock_claim.side_effect = ["task", KeyboardInterrupt()]
+        mock_run_task.side_effect = RuntimeError("task failed")
+
+        with self.assertRaises(KeyboardInterrupt):
+            run_agent_loop(config, config_path)
+
+        self.assertTrue(any("작업 실행 실패: task failed" in call.args[1] for call in mock_log.call_args_list))
+        mock_clear.assert_called_once_with(config_path)

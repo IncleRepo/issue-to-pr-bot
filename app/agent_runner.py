@@ -126,11 +126,19 @@ def run_agent_loop(config: AgentConfig, config_path: Path) -> None:
     log_message(config, f"로컬 agent 시작: {config.control_plane_url}")
     try:
         while True:
-            task = claim_task(config)
+            try:
+                task = claim_task(config)
+            except Exception as error:
+                log_message(config, f"작업 조회 실패: {error}")
+                time.sleep(config.poll_interval_seconds)
+                continue
             if not task:
                 time.sleep(config.poll_interval_seconds)
                 continue
-            run_claimed_task(config, task)
+            try:
+                run_claimed_task(config, task)
+            except Exception as error:
+                log_message(config, f"작업 실행 실패: {error}")
     finally:
         clear_pid_file(config_path)
 
