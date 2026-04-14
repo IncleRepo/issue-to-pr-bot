@@ -12,8 +12,10 @@ from app.main import (
     format_failure_next_steps,
     format_missing_status,
     handle_pull_request_review_payload,
+    run_bot,
     safe_create_issue_comment,
 )
+from app.github_pr import MergeRequestResult
 from app.verification import VerificationError
 
 
@@ -141,6 +143,40 @@ class MainTest(unittest.TestCase):
             self.assertIn("comment-posted", marker_path.read_text(encoding="utf-8"))
 
         create_comment_mock.assert_called_once()
+
+    @patch("app.runtime.orchestrator.post_merge_request_comment")
+    @patch("app.runtime.orchestrator.request_pull_request_merge")
+    @patch("app.runtime.orchestrator.prepare_prompt")
+    def test_run_bot_skips_prompt_preparation_for_merge_action(
+        self,
+        prepare_prompt_mock,
+        request_pull_request_merge_mock,
+        post_merge_request_comment_mock,
+    ) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=21,
+            issue_title="Merge this",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 승인되면 머지해줘",
+            comment_author="IncleRepo",
+            comment_id=7,
+            is_pull_request=True,
+            pull_request_number=21,
+        )
+        request_pull_request_merge_mock.return_value = MergeRequestResult(
+            pull_request_url="https://example.com/pr/21",
+            requested=True,
+            merged=False,
+            merge_sha=None,
+        )
+
+        with patch.dict(os.environ, {"BOT_CREATE_PR": "1", "GITHUB_TOKEN": "token"}, clear=True):
+            run_bot(Path("."), BotConfig(), request)
+
+        prepare_prompt_mock.assert_not_called()
+        request_pull_request_merge_mock.assert_called_once_with("IncleRepo/issue-to-pr-bot", 21, "token")
+        post_merge_request_comment_mock.assert_called_once()
 
 
 if __name__ == "__main__":

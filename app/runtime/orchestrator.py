@@ -119,13 +119,6 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
 
     runtime_options = resolve_runtime_options(command, config)
     branch_name = build_branch_name(request, config)
-    prepared_prompt: PreparedPrompt | None = None
-
-    if command.action == "plan" or runtime_options.mode == "codex":
-        prepared_prompt = prepare_prompt(request, workspace, config, command.action)
-        attachment_info = prepared_prompt.attachment_info
-    else:
-        attachment_info = collect_attachment_context(request)
 
     print("Bot execution started")
     print(f"Repository: {request.repository}")
@@ -136,6 +129,23 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
     print(f"Runtime options: {format_runtime_options(runtime_options)}")
     print(f"Verification commands: {format_check_commands(config)}")
     print(f"Target branch: {branch_name}")
+
+    if os.getenv("BOT_CREATE_PR") != "1":
+        print("BOT_CREATE_PR is not 1. Skipping PR creation.")
+        return
+
+    if command.action == "merge":
+        merge_result = handle_merge_request(request)
+        post_merge_request_comment(request, command, runtime_options, merge_result)
+        return
+
+    prepared_prompt: PreparedPrompt | None = None
+    if command.action == "plan" or runtime_options.mode == "codex":
+        prepared_prompt = prepare_prompt(request, workspace, config, command.action)
+        attachment_info = prepared_prompt.attachment_info
+    else:
+        attachment_info = collect_attachment_context(request)
+
     if prepared_prompt:
         print(f"Available secret env keys: {format_secret_keys_for_log(prepared_prompt.available_secret_keys)}")
         print(
@@ -147,15 +157,6 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         )
     else:
         print("Available secret env keys: `none`")
-
-    if os.getenv("BOT_CREATE_PR") != "1":
-        print("BOT_CREATE_PR is not 1. Skipping PR creation.")
-        return
-
-    if command.action == "merge":
-        merge_result = handle_merge_request(request)
-        post_merge_request_comment(request, command, runtime_options, merge_result)
-        return
 
     maybe_apply_issue_metadata(request, workspace)
 

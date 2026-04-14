@@ -17,14 +17,45 @@ jobs:
         github.event.review.author_association == 'MEMBER' ||
         github.event.review.author_association == 'COLLABORATOR'
       ) &&
+      github.event.review.state == 'approved' &&
       (
-        github.event.review.state == 'approved' ||
-        (vars.BOT_MENTION != '' && contains(github.event.review.body, vars.BOT_MENTION))
+        vars.BOT_MENTION == '' ||
+        !contains(github.event.review.body, vars.BOT_MENTION)
       )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bot engine
+        uses: actions/checkout@v4
+        with:
+          repository: IncleRepo/issue-to-pr-bot
+          ref: main
+          path: engine-repo
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Handle approved review auto-merge
+        working-directory: engine-repo
+        run: python -m app.review_merge_runner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOT_GITHUB_TOKEN: ${{ github.token }}
+
+  run-bot:
+    if: >
+      (
+        github.event.review.author_association == 'OWNER' ||
+        github.event.review.author_association == 'MEMBER' ||
+        github.event.review.author_association == 'COLLABORATOR'
+      ) &&
+      vars.BOT_MENTION != '' &&
+      contains(github.event.review.body, vars.BOT_MENTION)
     uses: IncleRepo/issue-to-pr-bot/.github/workflows/reusable-bot.yml@main
     secrets: inherit
     with:
       runner_labels_json: '["self-hosted","Windows"]'
       engine_repository: "IncleRepo/issue-to-pr-bot"
       engine_ref: "main"
-
