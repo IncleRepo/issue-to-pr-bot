@@ -207,21 +207,21 @@ jobs:
           }
 
           $runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-          $body = @"
-## 실행 결과
-
-### 요약
-- 상태: `failed`
-- 실패 단계: `$failedStep`
-- 오류 분류: `workflow`
-
-### 상세
-봇 엔진이 이슈 댓글을 남기기 전에 워크플로 단계에서 실패했습니다.
-
-### 다음 단계
-- Actions 로그 확인: $runUrl
-- 같은 멘션으로 다시 요청해 재시도
-"@.Trim()
+          $body = @(
+            "## 실행 결과",
+            "",
+            "### 요약",
+            "- 상태: `failed`",
+            "- 실패 단계: `$failedStep`",
+            "- 오류 분류: `workflow`",
+            "",
+            "### 상세",
+            "봇 엔진이 이슈 댓글을 남기기 전에 워크플로 단계에서 실패했습니다.",
+            "",
+            "### 다음 단계",
+            "- Actions 로그 확인: $runUrl",
+            "- 같은 멘션으로 다시 요청해 재시도"
+          ) -join "`n"
 
           $payload = @{ body = $body } | ConvertTo-Json -Depth 3
           $headers = @{
