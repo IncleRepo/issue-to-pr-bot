@@ -6,139 +6,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.install_manager import (
-    DEFAULT_ENGINE_REF,
-    DEFAULT_ENGINE_REPOSITORY,
     AgentBootstrapOptions,
     ControlPlaneOptions,
     DoctorOptions,
-    GithubConfigurationOptions,
-    HostBootstrapOptions,
-    InstallManagerOptions,
     TargetRepositoryOptions,
     auto_install_command_if_missing,
     bootstrap_agent_environment,
-    bootstrap_repository_environment,
-    bootstrap_host_environment,
-    configure_repository_settings,
     init_control_plane_environment,
     init_target_repository,
-    install_repository_environment,
     main,
     probe_command,
-    render_workflow_template,
     run_doctor,
 )
 
 
 class InstallManagerTest(unittest.TestCase):
-    def test_render_workflow_template_injects_centralized_values(self) -> None:
-        template = "\n".join(
-            [
-                "jobs:",
-                "  run-bot:",
-                "    uses: IncleRepo/issue-to-pr-bot/.github/workflows/reusable-bot.yml@main",
-                "    with:",
-                '      runner_labels_json: \'["self-hosted","Windows"]\'',
-                '      engine_repository: "IncleRepo/issue-to-pr-bot"',
-                '      engine_ref: "main"',
-            ]
-        )
-
-        rendered = render_workflow_template(
-            template,
-            engine_repository="Acme/bot-engine",
-            engine_ref="release",
-            runner_labels=["self-hosted", "linux", "x64"],
-        )
-
-        self.assertIn("uses: Acme/bot-engine/.github/workflows/reusable-bot.yml@release", rendered)
-        self.assertIn('runner_labels_json: \'["self-hosted","linux","x64"]\'', rendered)
-        self.assertIn('engine_repository: "Acme/bot-engine"', rendered)
-        self.assertIn('engine_ref: "release"', rendered)
-
-    def test_install_repository_environment_writes_minimal_workflow_set(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir)
-            result = install_repository_environment(
-                InstallManagerOptions(
-                    target=target,
-                    engine_repository="Acme/bot-engine",
-                    engine_ref="release",
-                    runner_labels=["self-hosted", "linux"],
-                    include_review_workflows=False,
-                    write_config=True,
-                )
-            )
-
-            issue_workflow = target / ".github/workflows/issue-comment.yml"
-            review_workflow = target / ".github/workflows/pull-request-review.yml"
-            config_file = target / ".issue-to-pr-bot.yml"
-
-            self.assertTrue(issue_workflow.exists())
-            self.assertFalse(review_workflow.exists())
-            self.assertTrue(config_file.exists())
-            self.assertIn("Acme/bot-engine", issue_workflow.read_text(encoding="utf-8"))
-            self.assertIn('runner_labels_json: \'["self-hosted","linux"]\'', issue_workflow.read_text(encoding="utf-8"))
-            self.assertEqual(
-                [operation.action for operation in result.operations],
-                ["created", "created"],
-            )
-
-    def test_install_repository_environment_skips_existing_files_without_force(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir)
-            workflow_path = target / ".github/workflows/issue-comment.yml"
-            workflow_path.parent.mkdir(parents=True, exist_ok=True)
-            workflow_path.write_text("manual change\n", encoding="utf-8")
-
-            result = install_repository_environment(
-                InstallManagerOptions(
-                    target=target,
-                    include_review_workflows=False,
-                )
-            )
-
-            self.assertEqual(workflow_path.read_text(encoding="utf-8"), "manual change\n")
-            self.assertEqual(result.operations[0].action, "skipped")
-
-    def test_install_repository_environment_overwrites_existing_files_with_force(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir)
-            workflow_path = target / ".github/workflows/issue-comment.yml"
-            workflow_path.parent.mkdir(parents=True, exist_ok=True)
-            workflow_path.write_text("manual change\n", encoding="utf-8")
-
-            result = install_repository_environment(
-                InstallManagerOptions(
-                    target=target,
-                    force=True,
-                    include_review_workflows=False,
-                )
-            )
-
-            self.assertIn(DEFAULT_ENGINE_REPOSITORY, workflow_path.read_text(encoding="utf-8"))
-            self.assertEqual(result.operations[0].action, "overwritten")
-
-    def test_main_supports_dry_run(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir)
-            exit_code = main(
-                [
-                    "init",
-                    "--target",
-                    str(target),
-                    "--engine-repository",
-                    DEFAULT_ENGINE_REPOSITORY,
-                    "--engine-ref",
-                    DEFAULT_ENGINE_REF,
-                    "--skip-review-workflows",
-                    "--dry-run",
-                ]
-            )
-
-            self.assertEqual(exit_code, 0)
-            self.assertFalse((target / ".github/workflows/issue-comment.yml").exists())
-
     def test_init_control_plane_environment_writes_worker_scaffold(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir)
@@ -181,7 +63,7 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(config_data["workspace_root"], str(workspace_root))
             self.assertEqual(result.operations[0].action, "created")
 
-    def test_init_target_repository_writes_minimal_non_actions_files(self) -> None:
+    def test_init_target_repository_writes_minimal_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir)
 
@@ -234,230 +116,57 @@ class InstallManagerTest(unittest.TestCase):
     @patch("app.install_manager.shutil.which")
     @patch("app.install_manager.run_command")
     @patch("app.install_manager.resolve_codex_home")
-    @patch("app.install_manager.detect_runner_root")
-    def test_doctor_reports_machine_and_repository_readiness(
+    def test_doctor_reports_local_agent_readiness(
         self,
-        mock_detect_runner_root,
         mock_resolve_codex_home,
         mock_run_command,
         mock_which,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as codex_dir:
             target = Path(temp_dir)
-            (target / ".github/workflows").mkdir(parents=True, exist_ok=True)
-            (target / ".github/workflows/issue-comment.yml").write_text("workflow\n", encoding="utf-8")
-            runner_root = target / "actions-runner"
-            runner_root.mkdir()
-            (runner_root / "run.cmd").write_text("@echo off\n", encoding="utf-8")
+            (target / "AGENTS.md").write_text("guide\n", encoding="utf-8")
+            (target / ".issue-to-pr-bot.yml").write_text("bot:\n  output_dir: bot-output\n", encoding="utf-8")
+            config_path = target / "agent-config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "control_plane_url": "https://example.workers.dev",
+                        "agent_token": "token-123",
+                        "repositories": ["Acme/example"],
+                        "workspace_root": str(target / "workspaces"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
             codex_home = Path(codex_dir)
             (codex_home / "auth.json").write_text("{}", encoding="utf-8")
             (codex_home / "config.toml").write_text("mode='chatgpt'\n", encoding="utf-8")
-
-            mock_detect_runner_root.return_value = runner_root
             mock_resolve_codex_home.return_value = codex_home
             mock_which.side_effect = lambda name: f"C:/{name}.exe"
             mock_run_command.side_effect = [
                 _completed(stdout="Python 3.11.0\n"),
                 _completed(stdout="git version 2.47.0.windows.1\n"),
-                _completed(stdout="Docker version 27.0.0\n"),
-                _completed(stdout="27.0.0\n"),
-                _completed(stdout="codex-cli 0.118.0\n"),
                 _completed(stdout="gh version 2.0.0\n"),
-                _completed(stdout=json.dumps([{"name": "BOT_MENTION"}, {"name": "BOT_APP_ID"}])),
-                _completed(stdout=json.dumps([{"name": "BOT_APP_PRIVATE_KEY"}])),
+                _completed(stdout="codex-cli 0.118.0\n"),
             ]
 
             result = run_doctor(
                 DoctorOptions(
                     target=target,
-                    repository="Acme/example",
+                    workspace_root=target / "workspaces",
+                    control_plane_url="https://example.workers.dev",
+                    config_path=config_path,
                 )
             )
 
         status_by_name = {check.name: check.status for check in result.checks}
         self.assertEqual(status_by_name["Python"], "pass")
-        self.assertEqual(status_by_name["Docker daemon"], "pass")
+        self.assertEqual(status_by_name["Git"], "pass")
+        self.assertEqual(status_by_name["Codex CLI"], "pass")
         self.assertEqual(status_by_name["Codex auth"], "pass")
-        self.assertEqual(status_by_name["Issue workflow"], "pass")
-        self.assertEqual(status_by_name["Repository variables"], "pass")
-        self.assertEqual(status_by_name["Repository secrets"], "pass")
-
-    @patch("app.install_manager.ensure_repository_support_paths")
-    @patch("app.install_manager.ensure_bootstrap_tooling")
-    @patch("app.install_manager.shutil.which", return_value="C:/gh.exe")
-    @patch("app.install_manager.run_command")
-    def test_configure_repository_settings_updates_variables_and_secret(
-        self,
-        mock_run_command,
-        _mock_which,
-        mock_ensure_bootstrap_tooling,
-        mock_ensure_repository_support_paths,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            key_file = Path(temp_dir) / "app.pem"
-            key_file.write_text("PRIVATE KEY\n", encoding="utf-8")
-            mock_ensure_repository_support_paths.return_value = type(
-                "SupportPaths",
-                (),
-                {
-                    "context_dir": Path("C:/issue-to-pr-bot-data/Acme__example/context"),
-                    "secrets_file": Path("C:/issue-to-pr-bot-data/Acme__example/secrets.env"),
-                },
-            )()
-
-            mock_run_command.side_effect = [
-                _completed(),
-                _completed(),
-                _completed(),
-                _completed(),
-                _completed(),
-            ]
-
-            result = configure_repository_settings(
-                GithubConfigurationOptions(
-                    repository="Acme/example",
-                    bot_mention="@acme-bot",
-                    bot_app_id="12345",
-                    bot_app_private_key_file=key_file,
-                )
-            )
-
-        self.assertEqual([operation.action for operation in result.operations], ["set", "set", "set", "set", "set"])
-        mock_ensure_bootstrap_tooling.assert_called_once_with(requires_github_cli=True, dry_run=False)
-        self.assertEqual(mock_run_command.call_args_list[0].args[0][:4], ["gh", "variable", "set", "BOT_MENTION"])
-        self.assertEqual(mock_run_command.call_args_list[1].args[0][:4], ["gh", "variable", "set", "BOT_APP_ID"])
-        self.assertEqual(mock_run_command.call_args_list[2].args[0][:4], ["gh", "variable", "set", "BOT_CONTEXT_DIR_HOST"])
-        self.assertEqual(mock_run_command.call_args_list[3].args[0][:4], ["gh", "variable", "set", "BOT_SECRETS_FILE_HOST"])
-        self.assertEqual(mock_run_command.call_args_list[4].args[0][:4], ["gh", "secret", "set", "BOT_APP_PRIVATE_KEY"])
-        self.assertEqual(mock_run_command.call_args_list[4].kwargs["input_text"], "PRIVATE KEY\n")
-
-    @patch("app.install_manager.run_doctor")
-    @patch("app.install_manager.configure_repository_settings")
-    @patch("app.install_manager.install_repository_environment")
-    def test_bootstrap_combines_install_github_configuration_and_doctor(
-        self,
-        mock_install,
-        mock_configure,
-        mock_doctor,
-    ) -> None:
-        mock_install.return_value = install_repository_environment(
-            InstallManagerOptions(target=Path(tempfile.gettempdir()), include_review_workflows=False, dry_run=True)
-        )
-        mock_configure.return_value = configure_repository_settings_for_test()
-        mock_doctor.return_value = run_doctor_for_test()
-
-        result = bootstrap_repository_environment(
-            InstallManagerOptions(target=Path(tempfile.gettempdir()), include_review_workflows=False, dry_run=True),
-            DoctorOptions(target=Path(tempfile.gettempdir())),
-            GithubConfigurationOptions(
-                repository="Acme/example",
-                bot_mention="@acme-bot",
-                bot_app_id="12345",
-                bot_app_private_key_file=Path(tempfile.gettempdir()) / "missing.pem",
-                dry_run=True,
-            ),
-        )
-
-        self.assertIsNotNone(result.github_result)
-        self.assertEqual(result.doctor_result.checks[0].status, "pass")
-
-    @patch("app.install_manager.run_doctor")
-    def test_bootstrap_host_requires_codex_login_before_runner_setup(self, mock_doctor) -> None:
-        from app.install_manager import DoctorCheck, DoctorResult
-
-        mock_doctor.return_value = DoctorResult(
-            checks=[
-                DoctorCheck(name="Python", status="pass", detail="ok"),
-                DoctorCheck(name="Git", status="pass", detail="ok"),
-                DoctorCheck(name="Docker CLI", status="pass", detail="ok"),
-                DoctorCheck(name="Docker daemon", status="pass", detail="ok"),
-                DoctorCheck(name="Codex CLI", status="pass", detail="ok"),
-                DoctorCheck(name="Codex auth", status="fail", detail="login required"),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir, self.assertRaises(RuntimeError):
-            bootstrap_host_environment(
-                HostBootstrapOptions(
-                    runner_root=Path(temp_dir),
-                    repository="Acme/example",
-                )
-            )
-
-    @patch("app.install_manager.ensure_runner_service_started")
-    @patch("app.install_manager.configure_runner")
-    @patch("app.install_manager.generate_runner_registration_token", return_value="runner-token")
-    @patch("app.install_manager.extract_runner_archive")
-    @patch("app.install_manager.download_runner_archive")
-    @patch("app.install_manager.resolve_runner_archive_source")
-    @patch("app.install_manager.run_doctor")
-    @patch("app.install_manager.ensure_bootstrap_tooling")
-    def test_bootstrap_host_downloads_and_registers_runner(
-        self,
-        mock_ensure_bootstrap_tooling,
-        mock_doctor,
-        mock_resolve_runner_archive_source,
-        mock_download_runner_archive,
-        mock_extract_runner_archive,
-        _mock_generate_runner_registration_token,
-        mock_configure_runner,
-        mock_ensure_runner_service_started,
-    ) -> None:
-        from app.install_manager import DoctorCheck, DoctorResult, RunnerArchiveSource
-
-        mock_doctor.return_value = DoctorResult(
-            checks=[
-                DoctorCheck(name="Python", status="pass", detail="ok"),
-                DoctorCheck(name="Git", status="pass", detail="ok"),
-                DoctorCheck(name="Docker CLI", status="pass", detail="ok"),
-                DoctorCheck(name="Docker daemon", status="pass", detail="ok"),
-                DoctorCheck(name="Codex CLI", status="pass", detail="ok"),
-                DoctorCheck(name="Codex auth", status="pass", detail="ok"),
-            ]
-        )
-        mock_resolve_runner_archive_source.return_value = RunnerArchiveSource(
-            url="https://example.com/actions-runner.zip",
-            name="actions-runner.zip",
-            description="download",
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            runner_root = Path(temp_dir)
-
-            def fake_extract(_archive_path, destination):
-                (destination / "config.cmd").write_text("@echo off\n", encoding="utf-8")
-                (destination / "run.cmd").write_text("@echo off\n", encoding="utf-8")
-                (destination / "svc.cmd").write_text("@echo off\n", encoding="utf-8")
-
-            mock_extract_runner_archive.side_effect = fake_extract
-
-            result = bootstrap_host_environment(
-                HostBootstrapOptions(
-                    runner_root=runner_root,
-                    repository="Acme/example",
-                    runner_name="runner-01",
-                    run_as_service=True,
-                )
-            )
-
-        self.assertEqual(result.operations[0].action, "prepared")
-        mock_ensure_bootstrap_tooling.assert_called_once_with(requires_github_cli=True, dry_run=False)
-        self.assertTrue(any(operation.name == "Runner download" for operation in result.operations))
-        self.assertTrue(any(operation.name == "Runner registration" and operation.action == "configured" for operation in result.operations))
-        mock_download_runner_archive.assert_called_once()
-        mock_configure_runner.assert_called_once()
-        mock_ensure_runner_service_started.assert_called_once()
-
-    @patch("app.install_manager.shutil.which")
-    @patch("app.install_manager.run_command")
-    def test_probe_command_uses_current_python_when_python_alias_is_missing(self, mock_run_command, mock_which) -> None:
-        mock_which.side_effect = lambda name: None if name == "python" else f"C:/{name}.exe"
-        mock_run_command.return_value = _completed(stdout="Python 3.11.9\n")
-
-        result = probe_command("Python", "python", ["--version"])
-
-        self.assertEqual(result.status, "pass")
-        self.assertIn("Python 3.11.9", result.detail)
+        self.assertEqual(status_by_name["Control plane URL"], "pass")
+        self.assertEqual(status_by_name["Agent config"], "pass")
 
     @patch("app.install_manager.refresh_process_path")
     @patch("app.install_manager.run_command")
@@ -481,25 +190,15 @@ class InstallManagerTest(unittest.TestCase):
             ["winget", "install", "--id", "GitHub.cli"],
         )
 
+    @patch("app.install_manager.run_command")
+    @patch("app.install_manager.shutil.which", return_value=None)
+    def test_probe_command_fails_when_binary_is_missing(self, _mock_which, _mock_run_command) -> None:
+        result = probe_command("Git", "git", ["--version"])
+        self.assertEqual(result.status, "fail")
+
 
 def _completed(*, stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
-
-
-def configure_repository_settings_for_test():
-    from app.install_manager import GithubConfigurationOperation, GithubConfigurationResult
-
-    return GithubConfigurationResult(
-        repository="Acme/example",
-        operations=[GithubConfigurationOperation(name="BOT_MENTION", action="would_set")],
-        next_steps=[],
-    )
-
-
-def run_doctor_for_test():
-    from app.install_manager import DoctorCheck, DoctorResult
-
-    return DoctorResult(checks=[DoctorCheck(name="Python", status="pass", detail="Python 3.11.0")])
 
 
 if __name__ == "__main__":

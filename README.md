@@ -97,23 +97,17 @@ issue-to-pr-bot-manager --help
 
 - Cloudflare Worker 제어면 스캐폴드 생성
 - 로컬 agent 설정 파일 생성
-- 대상 저장소에 workflow 설치
 - 최소 `.issue-to-pr-bot.yml` 생성
-- GitHub 변수/시크릿 등록
-- runner 준비 상태 점검
-- runner 다운로드와 등록 자동화
 - `gh`, `git`이 없으면 자동 설치 시도
-- 저장소별 외부 context 폴더, secret env 파일 경로 자동 준비
 
 반대로 매니저가 대신 못 하는 일도 있습니다.
 
 - GitHub App 생성
 - GitHub App 설치
-- Docker 설치
 - Codex 로그인
 - Cloudflare 계정 생성과 Worker 배포 승인
 
-이 다섯 가지는 사용자가 직접 해야 합니다.
+이 네 가지는 사용자가 직접 해야 합니다.
 
 ## 2. GitHub App 만들기
 
@@ -290,36 +284,6 @@ AGENTS.md
 
 그 다음 GitHub App을 이 저장소에 설치하면 됩니다.
 
-### 기존 GitHub Actions 호환 경로
-
-기존 호환 경로가 필요할 때만 아래 절차를 사용하세요.
-
-이제 봇을 붙일 저장소를 준비합니다.
-
-예시 저장소:
-
-- `IncleRepo/my-target-repo`
-
-로컬에 clone:
-
-```powershell
-git clone https://github.com/IncleRepo/my-target-repo.git
-cd my-target-repo
-```
-
-그리고 아래 명령을 실행합니다.
-
-```powershell
-issue-to-pr-bot-manager bootstrap `
-  --target C:\path\to\my-target-repo `
-  --repo IncleRepo/my-target-repo `
-  --bot-mention @my-issue-to-pr-bot `
-  --bot-app-id 123456 `
-  --bot-app-private-key-file C:\keys\my-app.pem `
-  --write-config `
-  --runner-root C:\actions-runner
-```
-
 ### 메타데이터도 자동으로 붙일 수 있나
 
 됩니다. 방식은 두 가지입니다.
@@ -351,51 +315,6 @@ Milestone: `Sprint 1`
 - 자동화나 workflow 변경 -> `automation`
 - `CODEOWNERS`가 있으면 reviewer 또는 team reviewer 요청
 
-이 명령이 해주는 일:
-
-- workflow 설치
-- 최소 `.issue-to-pr-bot.yml` 생성
-- GitHub 변수/시크릿 등록
-- `gh`가 없으면 자동 설치 시도
-- 저장소별 기본 외부 context 폴더와 secret env 파일 경로 생성
-- 현재 준비 상태 점검
-
-### 기본으로 만들어지는 값
-
-`bootstrap` 또는 `configure-github`를 실행하면 아래 저장소 변수도 같이 잡습니다.
-
-- `BOT_CONTEXT_DIR_HOST`
-- `BOT_SECRETS_FILE_HOST`
-
-기본 경로 예시:
-
-```text
-C:\Users\<내계정>\issue-to-pr-bot-data\<owner>__<repo>\context
-C:\Users\<내계정>\issue-to-pr-bot-data\<owner>__<repo>\secrets.env
-```
-
-처음에는 이 기본 경로를 그대로 써도 충분합니다.
-
-### 실제로 대상 저장소에 생기는 파일
-
-기본 설치 시 보통 아래 파일이 생깁니다.
-
-```text
-.github/workflows/issue-comment.yml
-.github/workflows/pull-request-review.yml
-.github/workflows/pull-request-review-comment.yml
-.issue-to-pr-bot.yml
-```
-
-리뷰 자동화가 필요 없으면 더 최소로 설치할 수도 있습니다.
-
-```powershell
-issue-to-pr-bot-manager init `
-  --target C:\path\to\my-target-repo `
-  --write-config `
-  --skip-review-workflows
-```
-
 ## 6. 변경 내용 commit, push
 
 대상 저장소에서:
@@ -405,10 +324,6 @@ git add .
 git commit -m "chore: bot 초기 설정"
 git push
 ```
-
-중요:
-
-- workflow는 기본 브랜치에 올라가 있어야 실제로 동작합니다.
 
 ## 7. 첫 테스트
 
@@ -469,63 +384,14 @@ issue-to-pr-bot-manager bootstrap-agent `
 issue-to-pr-bot-agent serve
 ```
 
-기존 GitHub Actions 기반 설치:
-
-```powershell
-issue-to-pr-bot-manager bootstrap `
-  --target C:\repo `
-  --repo IncleRepo/my-target-repo `
-  --bot-mention @my-issue-to-pr-bot `
-  --bot-app-id 123456 `
-  --bot-app-private-key-file C:\keys\my-app.pem `
-  --write-config `
-  --runner-root C:\actions-runner
-```
-
-workflow만 설치:
-
-```powershell
-issue-to-pr-bot-manager init --target C:\repo --write-config
-```
-
-workflow 갱신:
-
-```powershell
-issue-to-pr-bot-manager update --target C:\repo --write-config
-```
-
 상태 점검:
 
 ```powershell
 issue-to-pr-bot-manager doctor `
   --target C:\repo `
-  --repo IncleRepo/my-target-repo `
-  --runner-root C:\actions-runner
-```
-
-GitHub 변수/시크릿만 등록:
-
-```powershell
-issue-to-pr-bot-manager configure-github `
-  --repo IncleRepo/my-target-repo `
-  --bot-mention @my-issue-to-pr-bot `
-  --bot-app-id 123456 `
-  --bot-app-private-key-file C:\keys\my-app.pem
-```
-
-호스트 준비:
-
-```powershell
-issue-to-pr-bot-manager bootstrap-host `
-  --runner-root C:\actions-runner `
-  --repo IncleRepo/my-target-repo `
-  --run-as-service
-```
-
-미리 보기:
-
-```powershell
-issue-to-pr-bot-manager bootstrap --target C:\repo --write-config --dry-run
+  --workspace-root C:\issue-to-pr-bot-workspaces `
+  --control-plane-url https://issue-to-pr-bot-control.example.workers.dev `
+  --config-path C:\Users\<내계정>\.issue-to-pr-bot-agent\agent-config.json
 ```
 
 ## `.issue-to-pr-bot.yml`
@@ -591,7 +457,7 @@ bot:
 - 필수 context 누락
 - 필수 secret 누락
 
-즉 예전보다 “왜 실패했는지”를 Actions 로그를 열기 전에도 파악하기 쉬운 편입니다.
+즉 예전보다 “왜 실패했는지”를 GitHub 댓글만 보고도 파악하기 쉬운 편입니다.
 
 ## 로컬 개발
 
