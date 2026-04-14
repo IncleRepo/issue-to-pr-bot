@@ -40,6 +40,7 @@ DEFAULT_RUNNER_ROOT_CANDIDATES = (
 LATEST_RUNNER_RELEASE_API = "https://api.github.com/repos/actions/runner/releases/latest"
 RUNNER_RELEASE_USER_AGENT = "issue-to-pr-bot-manager"
 DEFAULT_SUPPORT_ROOT = Path.home() / "issue-to-pr-bot-data"
+DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-config.json"
 AUTO_INSTALL_PACKAGES = {
     "gh": {"label": "GitHub CLI", "winget": "GitHub.cli", "choco": "gh"},
     "git": {"label": "Git", "winget": "Git.Git", "choco": "git"},
@@ -172,6 +173,34 @@ class RepositorySupportPaths:
     secrets_file: Path
 
 
+@dataclass(frozen=True)
+class ControlPlaneOptions:
+    target: Path
+    worker_name: str
+    bot_mention: str
+    force: bool = False
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class AgentBootstrapOptions:
+    control_plane_url: str
+    agent_token: str
+    repositories: list[str]
+    workspace_root: Path
+    config_path: Path = DEFAULT_AGENT_CONFIG_PATH
+    poll_interval_seconds: int = 10
+    force: bool = False
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class AgentBootstrapResult:
+    config_path: Path
+    operations: list[FileOperation]
+    next_steps: list[str]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -204,6 +233,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "bootstrap-host":
             result = bootstrap_host_environment(build_host_bootstrap_options(args))
             print(format_host_bootstrap_result(result))
+            return 0
+        if args.command == "init-control-plane":
+            result = init_control_plane_environment(build_control_plane_options(args))
+            print(format_install_result(result))
+            return 0
+        if args.command == "bootstrap-agent":
+            result = bootstrap_agent_environment(build_agent_bootstrap_options(args))
+            print(format_agent_bootstrap_result(result))
             return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -257,6 +294,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prepare the Windows host: validate prerequisites and register a self-hosted runner.",
     )
     add_host_bootstrap_arguments(bootstrap_host_parser)
+
+    control_plane_parser = subparsers.add_parser(
+        "init-control-plane",
+        help="Scaffold a Cloudflare Worker control-plane project.",
+    )
+    control_plane_parser.add_argument("--target", required=True, help="Path to write the Worker project into.")
+    control_plane_parser.add_argument("--worker-name", required=True, help="Cloudflare Worker name.")
+    control_plane_parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot")
+    control_plane_parser.add_argument("--force", action="store_true")
+    control_plane_parser.add_argument("--dry-run", action="store_true")
+
+    agent_parser = subparsers.add_parser(
+        "bootstrap-agent",
+        help="Write a local polling-agent config for the Cloudflare control plane.",
+    )
+    agent_parser.add_argument("--control-plane-url", required=True)
+    agent_parser.add_argument("--agent-token", required=True)
+    agent_parser.add_argument("--repository", action="append", dest="repositories", default=[])
+    agent_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"))
+    agent_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH))
+    agent_parser.add_argument("--poll-interval-seconds", type=int, default=10)
+    agent_parser.add_argument("--force", action="store_true")
+    agent_parser.add_argument("--dry-run", action="store_true")
 
     return parser
 
@@ -439,6 +499,29 @@ def build_host_bootstrap_options(args: argparse.Namespace) -> HostBootstrapOptio
     )
 
 
+def build_control_plane_options(args: argparse.Namespace) -> ControlPlaneOptions:
+    return ControlPlaneOptions(
+        target=Path(args.target).resolve(),
+        worker_name=args.worker_name,
+        bot_mention=args.bot_mention,
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+
+
+def build_agent_bootstrap_options(args: argparse.Namespace) -> AgentBootstrapOptions:
+    return AgentBootstrapOptions(
+        control_plane_url=args.control_plane_url.rstrip("/"),
+        agent_token=args.agent_token,
+        repositories=list(args.repositories),
+        workspace_root=Path(args.workspace_root).resolve(),
+        config_path=Path(args.config_path).resolve(),
+        poll_interval_seconds=args.poll_interval_seconds,
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+
+
 def install_repository_environment(options: InstallManagerOptions) -> InstallManagerResult:
     ensure_target_exists(options.target)
 
@@ -474,8 +557,95 @@ def install_repository_environment(options: InstallManagerOptions) -> InstallMan
     )
 
 
+def init_control_plane_environment(options: ControlPlaneOptions) -> InstallManagerResult:
+    target = options.target
+    if not options.dry_run:
+        target.mkdir(parents=True, exist_ok=True)
+
+    replacements = {
+        "{{WORKER_NAME}}": options.worker_name,
+        "{{BOT_MENTION}}": options.bot_mention,
+    }
+    specs = [
+        ("package.json.example", "package.json"),
+        ("wrangler.jsonc.example", "wrangler.jsonc"),
+        ("README.md.example", "README.md"),
+        ("src/index.js.example", "src/index.js"),
+    ]
+
+    operations: list[FileOperation] = []
+    for template_name, relative_output_path in specs:
+        template_text = load_worker_template_text(template_name)
+        rendered = render_text_template(template_text, replacements)
+        action = write_managed_file(
+            target / relative_output_path,
+            rendered,
+            force=options.force,
+            dry_run=options.dry_run,
+        )
+        operations.append(FileOperation(path=target / relative_output_path, action=action))
+
+    return InstallManagerResult(
+        target=target,
+        operations=operations,
+        next_steps=[
+            "Worker 디렉터리에서 `npm install` 실행",
+            "Cloudflare KV namespace를 만들고 `wrangler.jsonc`의 TASK_QUEUE id를 채우기",
+            "`npx wrangler secret put CONTROL_PLANE_AGENT_TOKEN` 등 필수 secret 등록",
+            "`npx wrangler deploy`로 배포",
+        ],
+    )
+
+
+def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstrapResult:
+    if not options.repositories:
+        raise ValueError("--repository를 하나 이상 지정해야 합니다.")
+
+    if not options.dry_run:
+        options.workspace_root.mkdir(parents=True, exist_ok=True)
+        options.config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config_body = json.dumps(
+        {
+            "control_plane_url": options.control_plane_url,
+            "agent_token": options.agent_token,
+            "repositories": options.repositories,
+            "workspace_root": str(options.workspace_root),
+            "poll_interval_seconds": options.poll_interval_seconds,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    action = write_managed_file(
+        options.config_path,
+        config_body,
+        force=options.force,
+        dry_run=options.dry_run,
+    )
+    return AgentBootstrapResult(
+        config_path=options.config_path,
+        operations=[FileOperation(path=options.config_path, action=action)],
+        next_steps=[
+            "Codex 로그인 상태 확인",
+            f"`issue-to-pr-bot-agent serve --config {options.config_path}` 로 agent 시작",
+            "필요하면 Windows 작업 스케줄러나 서비스로 agent를 상시 실행",
+        ],
+    )
+
+
 def load_template_text(template_name: str) -> str:
     return resources.files("app.manager_templates").joinpath(template_name).read_text(encoding="utf-8")
+
+
+def load_worker_template_text(template_name: str) -> str:
+    return resources.files("app.worker_templates").joinpath(template_name).read_text(encoding="utf-8")
+
+
+def render_text_template(template_text: str, replacements: dict[str, str]) -> str:
+    rendered = template_text
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+    return rendered
 
 
 def ensure_target_exists(target: Path) -> None:
@@ -1301,6 +1471,26 @@ def format_host_bootstrap_result(result: HostBootstrapResult) -> str:
     lines.extend(["", "### 호스트 진단"])
     for check in result.doctor_result.checks:
         lines.append(f"- [{check.status}] {check.name}: {check.detail}")
+    lines.extend(["", "### 다음 단계"])
+    for step in result.next_steps:
+        lines.append(f"- {step}")
+    return "\n".join(lines)
+
+
+def format_agent_bootstrap_result(result: AgentBootstrapResult) -> str:
+    lines = [
+        "## 로컬 agent 준비 결과",
+        "",
+        f"- 설정 파일: `{result.config_path}`",
+        "",
+        "### 파일 작업",
+    ]
+    if not result.operations:
+        lines.append("- 없음")
+    else:
+        target_root = result.config_path.parent
+        for operation in result.operations:
+            lines.append(f"- `{relative_to_target(operation.path, target_root)}` -> `{operation.action}`")
     lines.extend(["", "### 다음 단계"])
     for step in result.next_steps:
         lines.append(f"- {step}")

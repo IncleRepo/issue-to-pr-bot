@@ -1,0 +1,36 @@
+# {{WORKER_NAME}}
+
+이 디렉터리는 issue-to-pr-bot 중앙 제어면 Worker입니다.
+
+## 준비할 것
+
+1. Cloudflare KV namespace 하나 생성
+2. `wrangler.jsonc`의 `TASK_QUEUE` id 채우기
+3. 아래 secret 등록
+
+```powershell
+npx wrangler secret put CONTROL_PLANE_AGENT_TOKEN
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
+npx wrangler secret put GITHUB_APP_ID
+npx wrangler secret put GITHUB_APP_PRIVATE_KEY
+```
+
+## 개발
+
+```powershell
+npm install
+npx wrangler dev
+```
+
+## 배포
+
+```powershell
+npx wrangler deploy
+```
+
+## 엔드포인트
+
+- `GET /health`
+- `POST /github/webhook`
+- `GET /api/tasks/claim`
+- `POST /api/tasks/:id/complete`

@@ -1,0 +1,287 @@
+const textEncoder = new TextEncoder();
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({ ok: true, service: "issue-to-pr-bot-control-plane" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/github/webhook") {
+      return handleGithubWebhook(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/tasks/claim") {
+      return handleClaimTask(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/api/tasks/") && url.pathname.endsWith("/complete")) {
+      return handleCompleteTask(request, env, url.pathname.split("/")[3]);
+    }
+
+    return json({ error: "not_found" }, 404);
+  },
+};
+
+async function handleGithubWebhook(request, env) {
+  const eventName = request.headers.get("X-GitHub-Event") || "";
+  const deliveryId = request.headers.get("X-GitHub-Delivery") || crypto.randomUUID();
+  const rawBody = await request.text();
+
+  if (!(await verifyWebhookSignature(request, rawBody, env))) {
+    return json({ error: "invalid_signature" }, 401);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+
+  if (!shouldEnqueue(eventName, payload, env)) {
+    return json({ accepted: false, reason: "ignored_event" });
+  }
+
+  const installationId = payload?.installation?.id;
+  if (!installationId) {
+    return json({ accepted: false, reason: "missing_installation" }, 400);
+  }
+
+  const taskId = crypto.randomUUID();
+  const task = {
+    id: taskId,
+    status: "pending",
+    eventName,
+    deliveryId,
+    repository: payload?.repository?.full_name || "unknown/unknown",
+    defaultBranch: payload?.repository?.default_branch || "main",
+    installationId,
+    createdAt: new Date().toISOString(),
+    payload,
+  };
+
+  await env.TASK_QUEUE.put(taskKey(taskId), JSON.stringify(task));
+  return json({ accepted: true, taskId });
+}
+
+async function handleClaimTask(request, env) {
+  if (!isAuthorizedAgent(request, env)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  const url = new URL(request.url);
+  const repositories = (url.searchParams.get("repositories") || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const agentId = url.searchParams.get("agent_id") || "unknown-agent";
+
+  const listed = await env.TASK_QUEUE.list({ prefix: "task:" });
+  for (const entry of listed.keys) {
+    const rawTask = await env.TASK_QUEUE.get(entry.name);
+    if (!rawTask) {
+      continue;
+    }
+    const task = JSON.parse(rawTask);
+    if (task.status !== "pending") {
+      continue;
+    }
+    if (repositories.length && !repositories.includes(task.repository)) {
+      continue;
+    }
+
+    task.status = "claimed";
+    task.claimedAt = new Date().toISOString();
+    task.agentId = agentId;
+    await env.TASK_QUEUE.put(entry.name, JSON.stringify(task));
+
+    const githubToken = await mintInstallationToken(task.installationId, env);
+    return json({
+      task: {
+        id: task.id,
+        eventName: task.eventName,
+        repository: task.repository,
+        defaultBranch: task.defaultBranch,
+        payload: task.payload,
+        githubToken,
+      },
+    });
+  }
+
+  return json({ task: null });
+}
+
+async function handleCompleteTask(request, env, taskId) {
+  if (!isAuthorizedAgent(request, env)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  const rawTask = await env.TASK_QUEUE.get(taskKey(taskId));
+  if (!rawTask) {
+    return json({ error: "not_found" }, 404);
+  }
+
+  const update = await request.json();
+  const task = JSON.parse(rawTask);
+  task.status = update.status || "completed";
+  task.completedAt = new Date().toISOString();
+  task.result = {
+    summary: update.summary || "",
+    detail: update.detail || "",
+  };
+  await env.TASK_QUEUE.put(taskKey(taskId), JSON.stringify(task));
+  return json({ ok: true });
+}
+
+function shouldEnqueue(eventName, payload, env) {
+  const mention = env.BOT_MENTION || "@incle-issue-to-pr-bot";
+  const association = payload?.comment?.author_association || payload?.review?.author_association || "";
+  const allowedAssociation = ["OWNER", "MEMBER", "COLLABORATOR"].includes(association);
+
+  if (eventName === "issue_comment") {
+    return allowedAssociation && (payload?.comment?.body || "").includes(mention);
+  }
+  if (eventName === "pull_request_review_comment") {
+    return allowedAssociation && (payload?.comment?.body || "").includes(mention);
+  }
+  if (eventName === "pull_request_review") {
+    const body = payload?.review?.body || "";
+    const state = (payload?.review?.state || "").toLowerCase();
+    return allowedAssociation && (body.includes(mention) || state === "approved");
+  }
+  return false;
+}
+
+async function verifyWebhookSignature(request, rawBody, env) {
+  const secret = env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) {
+    return true;
+  }
+
+  const signature = request.headers.get("X-Hub-Signature-256");
+  if (!signature || !signature.startsWith("sha256=")) {
+    return false;
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = await crypto.subtle.sign("HMAC", key, textEncoder.encode(rawBody));
+  const expected = `sha256=${toHex(digest)}`;
+  return timingSafeEqual(expected, signature);
+}
+
+function isAuthorizedAgent(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+  return !!token && token === env.CONTROL_PLANE_AGENT_TOKEN;
+}
+
+async function mintInstallationToken(installationId, env) {
+  const appId = env.GITHUB_APP_ID;
+  const privateKeyPem = env.GITHUB_APP_PRIVATE_KEY;
+  if (!appId || !privateKeyPem) {
+    throw new Error("Missing GitHub App credentials in Worker secrets.");
+  }
+
+  const jwt = await buildAppJwt(appId, privateKeyPem);
+  const response = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${jwt}`,
+      "User-Agent": "issue-to-pr-bot-control-plane",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Failed to mint installation token: ${response.status} ${body}`);
+  }
+
+  const data = await response.json();
+  return data.token;
+}
+
+async function buildAppJwt(appId, privateKeyPem) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iat: now - 60,
+    exp: now + 540,
+    iss: appId,
+  };
+
+  const encodedHeader = base64Url(JSON.stringify(header));
+  const encodedPayload = base64Url(JSON.stringify(payload));
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+
+  const key = await importPrivateKey(privateKeyPem);
+  const signature = await crypto.subtle.sign(
+    { name: "RSASSA-PKCS1-v1_5" },
+    key,
+    textEncoder.encode(signingInput),
+  );
+  return `${signingInput}.${base64Url(signature)}`;
+}
+
+async function importPrivateKey(pem) {
+  const clean = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  const der = Uint8Array.from(atob(clean), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey(
+    "pkcs8",
+    der.buffer,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+}
+
+function taskKey(taskId) {
+  return `task:${taskId}`;
+}
+
+function json(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+  });
+}
+
+function base64Url(value) {
+  const bytes = typeof value === "string" ? textEncoder.encode(value) : new Uint8Array(value);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function toHex(buffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function timingSafeEqual(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  let result = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return result === 0;
+}

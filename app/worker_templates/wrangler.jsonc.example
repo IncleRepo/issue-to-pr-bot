@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "{{WORKER_NAME}}",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-14",
+  "vars": {
+    "BOT_MENTION": "{{BOT_MENTION}}"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "TASK_QUEUE",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ]
+}

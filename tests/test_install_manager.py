@@ -8,14 +8,18 @@ from unittest.mock import patch
 from app.install_manager import (
     DEFAULT_ENGINE_REF,
     DEFAULT_ENGINE_REPOSITORY,
+    AgentBootstrapOptions,
+    ControlPlaneOptions,
     DoctorOptions,
     GithubConfigurationOptions,
     HostBootstrapOptions,
     InstallManagerOptions,
     auto_install_command_if_missing,
+    bootstrap_agent_environment,
     bootstrap_repository_environment,
     bootstrap_host_environment,
     configure_repository_settings,
+    init_control_plane_environment,
     install_repository_environment,
     main,
     probe_command,
@@ -132,6 +136,72 @@ class InstallManagerTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertFalse((target / ".github/workflows/issue-comment.yml").exists())
+
+    def test_init_control_plane_environment_writes_worker_scaffold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir)
+
+            result = init_control_plane_environment(
+                ControlPlaneOptions(
+                    target=target,
+                    worker_name="issue-to-pr-bot-control",
+                    bot_mention="@issue-to-pr-bot",
+                )
+            )
+
+            self.assertTrue((target / "package.json").exists())
+            self.assertTrue((target / "wrangler.jsonc").exists())
+            self.assertTrue((target / "src/index.js").exists())
+            self.assertIn("issue-to-pr-bot-control", (target / "package.json").read_text(encoding="utf-8"))
+            self.assertIn("@issue-to-pr-bot", (target / "wrangler.jsonc").read_text(encoding="utf-8"))
+            self.assertEqual([operation.action for operation in result.operations], ["created", "created", "created", "created"])
+
+    def test_bootstrap_agent_environment_writes_local_agent_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "agent/agent-config.json"
+            workspace_root = temp_path / "workspaces"
+
+            result = bootstrap_agent_environment(
+                AgentBootstrapOptions(
+                    control_plane_url="https://example.workers.dev",
+                    agent_token="token-123",
+                    repositories=["Acme/repo-a", "Acme/repo-b"],
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                )
+            )
+
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config_data["control_plane_url"], "https://example.workers.dev")
+            self.assertEqual(config_data["agent_token"], "token-123")
+            self.assertEqual(config_data["repositories"], ["Acme/repo-a", "Acme/repo-b"])
+            self.assertEqual(config_data["workspace_root"], str(workspace_root))
+            self.assertEqual(result.operations[0].action, "created")
+
+    def test_main_supports_bootstrap_agent_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            config_path = temp_path / "agent/agent-config.json"
+            exit_code = main(
+                [
+                    "bootstrap-agent",
+                    "--control-plane-url",
+                    "https://example.workers.dev",
+                    "--agent-token",
+                    "token-123",
+                    "--repository",
+                    "Acme/repo-a",
+                    "--workspace-root",
+                    str(temp_path / "workspaces"),
+                    "--config-path",
+                    str(config_path),
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertFalse(config_path.exists())
 
     @patch("app.install_manager.shutil.which")
     @patch("app.install_manager.run_command")
