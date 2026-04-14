@@ -109,10 +109,11 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(result.operations[0].action, "created")
             self.assertEqual(result.task_name, "issue-to-pr-bot-agent")
 
-    @patch("app.install_manager.shutil.which", return_value=r"C:\venv\Scripts\issue-to-pr-bot-agent.exe")
-    def test_build_agent_launch_command_prefers_console_script(self, _mock_which) -> None:
+    @patch("app.install_manager.sys.executable", r"C:\venv\Scripts\python.exe")
+    @patch("app.install_manager.Path.exists", return_value=True)
+    def test_build_agent_launch_command_prefers_pythonw(self, _mock_exists) -> None:
         command = build_agent_launch_command(Path(r"C:\agent\config.json"))
-        self.assertIn(r'"C:\venv\Scripts\issue-to-pr-bot-agent.exe"', command)
+        self.assertIn(r'"C:\venv\Scripts\pythonw.exe"', command)
         self.assertIn(r'--config "C:\agent\config.json"', command)
 
     @patch("app.install_manager.bootstrap_control_plane_environment")

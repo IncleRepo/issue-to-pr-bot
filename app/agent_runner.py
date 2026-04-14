@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -22,6 +24,7 @@ from app import main as bot_main
 
 
 DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-config.json"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -58,8 +61,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_claimed_task(config, task)
             return 0
 
+        if args.command == "start":
+            return start_agent_process(Path(args.config))
+
+        if args.command == "stop":
+            return stop_agent_process(Path(args.config))
+
+        if args.command == "status":
+            return print_agent_status(Path(args.config))
+
         if args.command == "serve":
-            run_agent_loop(config)
+            run_agent_loop(config, Path(args.config))
             return 0
     except Exception as error:
         config_path = Path(args.config) if getattr(args, "config", None) else None
@@ -81,6 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_once = subparsers.add_parser("run-once", help="작업 하나만 가져와 실행합니다.")
     run_once.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
 
+    start = subparsers.add_parser("start", help="agent를 백그라운드로 시작합니다.")
+    start.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
+
+    stop = subparsers.add_parser("stop", help="백그라운드 agent를 중지합니다.")
+    stop.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
+
+    status = subparsers.add_parser("status", help="agent 실행 상태를 확인합니다.")
+    status.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
+
     serve = subparsers.add_parser("serve", help="계속 polling 하면서 작업을 처리합니다.")
     serve.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
 
@@ -100,14 +121,92 @@ def load_agent_config(path: Path) -> AgentConfig:
     )
 
 
-def run_agent_loop(config: AgentConfig) -> None:
+def run_agent_loop(config: AgentConfig, config_path: Path) -> None:
+    ensure_single_instance(config_path, config)
     log_message(config, f"로컬 agent 시작: {config.control_plane_url}")
-    while True:
-        task = claim_task(config)
-        if not task:
-            time.sleep(config.poll_interval_seconds)
-            continue
-        run_claimed_task(config, task)
+    try:
+        while True:
+            task = claim_task(config)
+            if not task:
+                time.sleep(config.poll_interval_seconds)
+                continue
+            run_claimed_task(config, task)
+    finally:
+        clear_pid_file(config_path)
+
+
+def start_agent_process(config_path: Path) -> int:
+    config = load_agent_config(config_path)
+    running_pid = read_running_pid(config_path)
+    if running_pid:
+        log_message(config, f"agent가 이미 실행 중입니다. PID={running_pid}")
+        return 0
+
+    executable = resolve_background_python()
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+    config.log_path.parent.mkdir(parents=True, exist_ok=True)
+    with config.log_path.open("a", encoding="utf-8") as handle:
+        subprocess.Popen(
+            [str(executable), "-m", "app.agent_runner", "serve", "--config", str(config_path)],
+            cwd=str(REPOSITORY_ROOT),
+            stdout=handle,
+            stderr=handle,
+            stdin=subprocess.DEVNULL,
+            creationflags=creationflags,
+            close_fds=True,
+        )
+    time.sleep(2)
+    running_pid = read_running_pid(config_path)
+    if not running_pid:
+        log_message(config, "agent 시작에 실패했습니다. 로그 파일을 확인하세요.")
+        return 1
+    log_message(config, f"agent 시작 완료. PID={running_pid}")
+    return 0
+
+
+def stop_agent_process(config_path: Path) -> int:
+    config = load_agent_config(config_path)
+    running_pid = read_running_pid(config_path)
+    if not running_pid:
+        clear_pid_file(config_path)
+        log_message(config, "실행 중인 agent가 없습니다.")
+        return 0
+
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(running_pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            os.kill(running_pid, signal.SIGTERM)
+    except OSError:
+        clear_pid_file(config_path)
+        log_message(config, "agent 프로세스를 찾지 못했습니다. pid 파일을 정리했습니다.")
+        return 0
+
+    time.sleep(1)
+    if is_process_running(running_pid):
+        log_message(config, f"agent 종료 확인 실패. PID={running_pid}")
+        return 1
+    clear_pid_file(config_path)
+    log_message(config, "agent를 중지했습니다.")
+    return 0
+
+
+def print_agent_status(config_path: Path) -> int:
+    config = load_agent_config(config_path)
+    running_pid = read_running_pid(config_path)
+    if running_pid:
+        log_message(config, f"agent 실행 중. PID={running_pid}")
+        return 0
+    log_message(config, "agent가 실행 중이 아닙니다.")
+    return 1
 
 
 def claim_task(config: AgentConfig) -> ClaimedTask | None:
@@ -239,6 +338,63 @@ def run_command(command: list[str], config: AgentConfig | None = None) -> None:
         raise RuntimeError(f"명령 실행 실패({result.returncode}): {' '.join(command)}")
 
 
+def resolve_pid_path(config_path: Path) -> Path:
+    return config_path.with_suffix(".pid")
+
+
+def is_process_running(process_id: int) -> bool:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {process_id}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        return str(process_id) in (result.stdout or "")
+    try:
+        os.kill(process_id, 0)
+    except OSError:
+        return False
+    return True
+
+
+def read_running_pid(config_path: Path) -> int | None:
+    pid_path = resolve_pid_path(config_path)
+    if not pid_path.exists():
+        return None
+    try:
+        process_id = int(pid_path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        pid_path.unlink(missing_ok=True)
+        return None
+    if not is_process_running(process_id):
+        pid_path.unlink(missing_ok=True)
+        return None
+    return process_id
+
+
+def ensure_single_instance(config_path: Path, config: AgentConfig) -> None:
+    running_pid = read_running_pid(config_path)
+    current_pid = os.getpid()
+    pid_path = resolve_pid_path(config_path)
+    if running_pid and running_pid != current_pid:
+        raise RuntimeError(f"이미 다른 agent가 실행 중입니다. PID={running_pid}")
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(current_pid), encoding="utf-8")
+    log_message(config, f"pid 파일 기록: {pid_path}")
+
+
+def clear_pid_file(config_path: Path) -> None:
+    resolve_pid_path(config_path).unlink(missing_ok=True)
+
+
+def resolve_background_python() -> Path:
+    return Path(sys.executable)
+
+
 def try_resolve_log_path(config_path: Path) -> Path | None:
     if not config_path.exists():
         return None
@@ -251,7 +407,8 @@ def try_resolve_log_path(config_path: Path) -> Path | None:
 
 
 def log_message(config: AgentConfig | None, message: str, *, log_path: Path | None = None) -> None:
-    print(message)
+    if sys.stdout is not None:
+        print(message)
     target_path = log_path or (config.log_path if config else None)
     if not target_path:
         return

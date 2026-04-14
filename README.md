@@ -299,7 +299,19 @@ schtasks /Run /TN "issue-to-pr-bot-agent"
 작업 스케줄러 등록을 원하지 않으면 `--skip-task`를 붙이면 됩니다. 그 경우에는 직접 아래 명령으로 agent를 실행하면 됩니다.
 
 ```powershell
-issue-to-pr-bot-agent serve
+issue-to-pr-bot-agent start
+```
+
+상태 확인:
+
+```powershell
+issue-to-pr-bot-agent status
+```
+
+중지:
+
+```powershell
+issue-to-pr-bot-agent stop
 ```
 
 ## 5. 대상 저장소 최소 파일 준비
@@ -464,7 +476,13 @@ schtasks /Run /TN "issue-to-pr-bot-agent"
 작업 스케줄러를 쓰지 않으려면 직접 실행:
 
 ```powershell
-issue-to-pr-bot-agent serve
+issue-to-pr-bot-agent start
+```
+
+상태 확인:
+
+```powershell
+issue-to-pr-bot-agent status
 ```
 
 상태 점검:

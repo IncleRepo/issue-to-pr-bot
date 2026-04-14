@@ -539,7 +539,8 @@ def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstra
         next_steps.append(f"Windows 작업 스케줄러 작업: `{options.task_name}` ({task_status})")
         next_steps.append(f"즉시 실행: `schtasks /Run /TN \"{options.task_name}\"`")
     else:
-        next_steps.append(f"`issue-to-pr-bot-agent serve --config {options.config_path}` 로 agent 시작")
+        next_steps.append(f"`issue-to-pr-bot-agent start --config {options.config_path}` 로 agent 시작")
+    next_steps.append(f"`issue-to-pr-bot-agent status --config {options.config_path}` 로 상태 확인")
 
     return AgentBootstrapResult(
         config_path=options.config_path,
@@ -715,10 +716,9 @@ def write_managed_file(path: Path, content: str, *, force: bool, dry_run: bool) 
 
 
 def build_agent_launch_command(config_path: Path) -> str:
-    agent_executable = shutil.which("issue-to-pr-bot-agent")
-    if agent_executable:
-        return f'"{agent_executable}" serve --config "{config_path}"'
-    return f'"{sys.executable}" -m app.agent_runner serve --config "{config_path}"'
+    pythonw_path = Path(sys.executable).with_name("pythonw.exe")
+    interpreter = pythonw_path if pythonw_path.exists() else Path(sys.executable)
+    return f'"{interpreter}" -m app.agent_runner serve --config "{config_path}"'
 
 
 def register_agent_scheduled_task(options: AgentBootstrapOptions) -> str:
