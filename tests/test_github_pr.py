@@ -10,12 +10,15 @@ from app.github_pr import (
     BOT_AUTO_MERGE_MARKER,
     BOT_PR_MARKER,
     BaseSyncResult,
+    apply_issue_metadata,
+    apply_pull_request_metadata,
     build_pull_request_body,
     matches_protected_path,
     request_pull_request_merge,
     sync_pull_request_branch_with_base,
     write_marker_file,
 )
+from app.domain.models import MetadataPlan
 
 
 class GitHubPrTest(unittest.TestCase):
@@ -209,6 +212,63 @@ class GitHubPrTest(unittest.TestCase):
         self.assertTrue(result.merged)
         self.assertEqual(result.merge_sha, "abc123")
         self.assertEqual(result.pull_request_url, "https://example.com/pr/5")
+
+    @patch("app.github_pr.github_request")
+    def test_apply_issue_metadata_uses_existing_labels_and_milestone(self, github_request_mock) -> None:
+        github_request_mock.side_effect = [
+            [{"name": "bug"}, {"name": "documentation"}],
+            None,
+            [{"number": 3, "title": "Sprint 1"}],
+            None,
+        ]
+
+        apply_issue_metadata(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=9,
+            token="token",
+            plan=MetadataPlan(
+                issue_labels=["bug", "docs"],
+                pr_labels=[],
+                assignees=["@alice"],
+                reviewers=[],
+                team_reviewers=[],
+                milestone_title="Sprint 1",
+            ),
+        )
+
+        label_call = github_request_mock.call_args_list[1]
+        issue_call = github_request_mock.call_args_list[3]
+        self.assertIn("/repos/IncleRepo/issue-to-pr-bot/issues/9/labels", label_call.args[1])
+        self.assertEqual(label_call.args[3], {"labels": ["bug", "documentation"]})
+        self.assertEqual(issue_call.args[3], {"assignees": ["alice"], "milestone": 3})
+
+    @patch("app.github_pr.github_request")
+    def test_apply_pull_request_metadata_requests_reviewers(self, github_request_mock) -> None:
+        github_request_mock.side_effect = [
+            [{"name": "automation"}],
+            [],
+            None,
+            None,
+            None,
+        ]
+
+        apply_pull_request_metadata(
+            repository="IncleRepo/issue-to-pr-bot",
+            pull_request_number=15,
+            token="token",
+            plan=MetadataPlan(
+                issue_labels=[],
+                pr_labels=["automation"],
+                assignees=["@alice"],
+                reviewers=["@bob"],
+                team_reviewers=["@org/backend"],
+                milestone_title=None,
+            ),
+        )
+
+        review_call = github_request_mock.call_args_list[-1]
+        self.assertIn("/repos/IncleRepo/issue-to-pr-bot/pulls/15/requested_reviewers", review_call.args[1])
+        self.assertEqual(review_call.args[3], {"reviewers": ["bob"], "team_reviewers": ["org/backend"]})
 
 
 if __name__ == "__main__":

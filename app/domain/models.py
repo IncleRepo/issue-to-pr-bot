@@ -41,3 +41,13 @@ class BotRuntimeOptions:
     effort: str | None = None
     sync_base: bool = False
     request_merge: bool = False
+
+
+@dataclass(frozen=True)
+class MetadataPlan:
+    issue_labels: list[str]
+    pr_labels: list[str]
+    assignees: list[str]
+    reviewers: list[str]
+    team_reviewers: list[str]
+    milestone_title: str | None = None

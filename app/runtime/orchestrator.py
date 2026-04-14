@@ -11,7 +11,13 @@ from app.auto_merge import handle_pull_request_review_event
 from app.codex_runner import create_codex_pr, run_codex_plan
 from app.config import BotConfig, load_config
 from app.domain.models import BotCommand, BotRuntimeOptions, IssueRequest
-from app.github_pr import MergeRequestResult, PullRequestResult, create_test_pr, request_pull_request_merge
+from app.github_pr import (
+    MergeRequestResult,
+    PullRequestResult,
+    apply_issue_metadata_if_possible,
+    create_test_pr,
+    request_pull_request_merge,
+)
 from app.prompting import PreparedPrompt, prepare_prompt
 from app.repo_context import MissingContextError, collect_context_documents, get_external_context_root
 from app.repo_rules import resolve_bot_config
@@ -151,6 +157,8 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         post_merge_request_comment(request, command, runtime_options, merge_result)
         return
 
+    maybe_apply_issue_metadata(request, workspace)
+
     if command.action == "plan":
         result = run_codex_plan(request, workspace, config, command, runtime_options, prepared_prompt)
         post_plan_comment(request, config, command, runtime_options, attachment_info, result.output)
@@ -199,6 +207,23 @@ def handle_merge_request(request: IssueRequest, pull_request_url: str | None = N
         raise RuntimeError("Could not determine the target pull request number for merge.")
 
     return request_pull_request_merge(request.repository, pull_request_number, token)
+
+
+def maybe_apply_issue_metadata(request: IssueRequest, workspace: Path) -> None:
+    if request.is_pull_request:
+        return
+
+    token = os.getenv("BOT_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if not token:
+        return
+
+    apply_issue_metadata_if_possible(
+        repository=request.repository,
+        issue_number=request.issue_number,
+        request=request,
+        token=token,
+        workspace=workspace,
+    )
 
 
 def parse_pull_request_number(pull_request_url: str | None) -> int | None:

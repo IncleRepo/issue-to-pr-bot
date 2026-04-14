@@ -17,6 +17,8 @@ from app.bot import (
     build_test_commit_message,
 )
 from app.config import BotConfig, get_check_commands, load_config
+from app.domain.models import MetadataPlan
+from app.metadata_rules import infer_issue_metadata, infer_pull_request_metadata
 
 BOT_PR_MARKER = "<!-- incle-issue-to-pr-bot -->"
 BOT_AUTO_MERGE_MARKER = "<!-- incle-issue-to-pr-bot:auto-merge -->"
@@ -218,6 +220,14 @@ def commit_push_and_open_pr(
         changed_files,
         verification_commands or [],
     )
+    apply_pull_request_metadata_if_possible(
+        repository=repository,
+        pull_request_url=pr_url,
+        request=request,
+        token=token,
+        workspace=workspace,
+        changed_files=changed_files,
+    )
 
     return PullRequestResult(
         branch_name=branch_name,
@@ -397,6 +407,101 @@ def ensure_pull_request(
     }
     response = github_request("POST", f"/repos/{repository}/pulls", token, payload)
     return response["html_url"]
+
+
+def apply_issue_metadata_if_possible(
+    repository: str,
+    issue_number: int,
+    request: IssueRequest,
+    token: str,
+    workspace: Path,
+) -> None:
+    try:
+        plan = infer_issue_metadata(workspace, request)
+        apply_issue_metadata(repository, issue_number, token, plan)
+    except Exception as error:
+        print(f"이슈 메타데이터 적용을 건너뜁니다: {error}")
+
+
+def apply_pull_request_metadata_if_possible(
+    repository: str,
+    pull_request_url: str | None,
+    request: IssueRequest,
+    token: str,
+    workspace: Path,
+    changed_files: list[str],
+) -> None:
+    pull_request_number = parse_pull_request_number(pull_request_url)
+    if not pull_request_number:
+        return
+
+    try:
+        plan = infer_pull_request_metadata(workspace, request, changed_files)
+        apply_pull_request_metadata(repository, pull_request_number, token, plan)
+    except Exception as error:
+        print(f"PR 메타데이터 적용을 건너뜁니다: {error}")
+
+
+def apply_issue_metadata(
+    repository: str,
+    issue_number: int,
+    token: str,
+    plan: MetadataPlan,
+) -> None:
+    if not any((plan.issue_labels, plan.assignees, plan.milestone_title)):
+        return
+
+    if plan.issue_labels:
+        labels = resolve_existing_labels(repository, token, plan.issue_labels)
+        if labels:
+            github_request("POST", f"/repos/{repository}/issues/{issue_number}/labels", token, {"labels": labels})
+
+    issue_payload: dict[str, object] = {}
+    if plan.assignees:
+        issue_payload["assignees"] = normalize_usernames(plan.assignees)
+    milestone_number = resolve_milestone_number(repository, token, plan.milestone_title)
+    if milestone_number is not None:
+        issue_payload["milestone"] = milestone_number
+    if issue_payload:
+        github_request("PATCH", f"/repos/{repository}/issues/{issue_number}", token, issue_payload)
+
+
+def apply_pull_request_metadata(
+    repository: str,
+    pull_request_number: int,
+    token: str,
+    plan: MetadataPlan,
+) -> None:
+    apply_issue_metadata(
+        repository=repository,
+        issue_number=pull_request_number,
+        token=token,
+        plan=MetadataPlan(
+            issue_labels=plan.pr_labels,
+            pr_labels=[],
+            assignees=plan.assignees,
+            reviewers=[],
+            team_reviewers=[],
+            milestone_title=plan.milestone_title,
+        ),
+    )
+
+    reviewers = normalize_usernames(plan.reviewers)
+    team_reviewers = normalize_teams(plan.team_reviewers)
+    if not reviewers and not team_reviewers:
+        return
+
+    payload: dict[str, object] = {}
+    if reviewers:
+        payload["reviewers"] = reviewers
+    if team_reviewers:
+        payload["team_reviewers"] = team_reviewers
+    github_request(
+        "POST",
+        f"/repos/{repository}/pulls/{pull_request_number}/requested_reviewers",
+        token,
+        payload,
+    )
 
 
 def get_pull_request(repository: str, pull_request_number: int, token: str):
@@ -611,6 +716,94 @@ def create_issue_comment(
         {"body": body},
     )
     return response["html_url"]
+
+
+def parse_pull_request_number(pull_request_url: str | None) -> int | None:
+    if not pull_request_url:
+        return None
+    match = re.search(r"/pull/(\d+)", pull_request_url)
+    return int(match.group(1)) if match else None
+
+
+def resolve_existing_labels(repository: str, token: str, requested_labels: list[str]) -> list[str]:
+    available = github_request("GET", f"/repos/{repository}/labels?per_page=100", token)
+    label_map = {normalize_label_name(item["name"]): item["name"] for item in available}
+    resolved: list[str] = []
+    for requested in requested_labels:
+        direct = label_map.get(normalize_label_name(requested))
+        if direct and direct not in resolved:
+            resolved.append(direct)
+            continue
+        for candidate in expand_label_candidates(requested):
+            matched = label_map.get(normalize_label_name(candidate))
+            if matched and matched not in resolved:
+                resolved.append(matched)
+                break
+    return resolved
+
+
+def resolve_milestone_number(repository: str, token: str, requested_title: str | None) -> int | None:
+    if not requested_title:
+        return None
+
+    milestones = github_request("GET", f"/repos/{repository}/milestones?state=open&per_page=100", token)
+    target = normalize_label_name(requested_title)
+    for milestone in milestones:
+        if normalize_label_name(milestone["title"]) == target:
+            return int(milestone["number"])
+
+    for milestone in milestones:
+        normalized_title = normalize_label_name(milestone["title"])
+        if target in normalized_title or normalized_title in target:
+            return int(milestone["number"])
+    return None
+
+
+def expand_label_candidates(requested: str) -> list[str]:
+    normalized = normalize_label_name(requested)
+    variants = [requested]
+    label_aliases = {
+        "bug": ["fix", "bugs", "버그"],
+        "enhancement": ["feature", "features", "improvement", "개선", "기능"],
+        "documentation": ["docs", "doc", "문서"],
+        "refactor": ["cleanup", "리팩토링"],
+        "tests": ["test", "qa", "테스트"],
+        "automation": ["bot", "ci", "workflow", "자동화"],
+        "dependencies": ["dependency", "deps", "의존성"],
+    }
+    for canonical, aliases in label_aliases.items():
+        names = [canonical, *aliases]
+        if normalized in {normalize_label_name(name) for name in names}:
+            variants.extend(names)
+    return variants
+
+
+def normalize_usernames(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        candidate = value.strip()
+        if candidate.startswith("@"):
+            candidate = candidate[1:]
+        if not candidate or "/" in candidate or candidate in normalized:
+            continue
+        normalized.append(candidate)
+    return normalized
+
+
+def normalize_teams(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        candidate = value.strip()
+        if candidate.startswith("@"):
+            candidate = candidate[1:]
+        if not candidate or "/" not in candidate or candidate in normalized:
+            continue
+        normalized.append(candidate)
+    return normalized
+
+
+def normalize_label_name(value: str) -> str:
+    return re.sub(r"[\s_\-]+", "", value.strip().lower())
 
 
 def github_request(method: str, path: str, token: str, payload: dict | None = None):
