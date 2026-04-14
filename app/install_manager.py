@@ -13,6 +13,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Sequence
 
+from app.runtime.comments import configure_output_encoding
+
 
 CONFIG_TEMPLATE_NAME = ".issue-to-pr-bot.yml.example"
 AGENTS_TEMPLATE_NAME = "AGENTS.md.example"
@@ -130,6 +132,7 @@ class BootstrapAllOptions:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_output_encoding()
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 

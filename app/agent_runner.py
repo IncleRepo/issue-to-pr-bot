@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Sequence
 
 from app import main as bot_main
+from app.runtime.comments import configure_output_encoding
 
 
 DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-config.json"
@@ -48,6 +49,7 @@ class ClaimedTask:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_output_encoding()
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 

@@ -436,6 +436,15 @@ def write_comment_marker() -> None:
 
 
 def configure_output_encoding() -> None:
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:
+            pass
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
