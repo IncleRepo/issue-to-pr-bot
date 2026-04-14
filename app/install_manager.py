@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -19,6 +21,7 @@ DEFAULT_SUPPORT_ROOT = Path.home() / "issue-to-pr-bot-data"
 AUTO_INSTALL_PACKAGES = {
     "gh": {"label": "GitHub CLI", "winget": "GitHub.cli", "choco": "gh"},
     "git": {"label": "Git", "winget": "Git.Git", "choco": "git"},
+    "npm": {"label": "Node.js", "winget": "OpenJS.NodeJS.LTS", "choco": "nodejs-lts"},
 }
 CRITICAL_CHECKS = {"Python", "Git", "Codex CLI", "Codex auth"}
 
@@ -93,6 +96,35 @@ class AgentBootstrapResult:
     next_steps: list[str]
 
 
+@dataclass(frozen=True)
+class ControlPlaneBootstrapOptions:
+    target: Path
+    worker_name: str
+    bot_mention: str
+    github_app_id: str
+    github_app_private_key_file: Path
+    agent_token: str | None = None
+    webhook_secret: str | None = None
+    force: bool = False
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class ControlPlaneBootstrapResult:
+    install_result: InstallManagerResult
+    operations: list[str]
+    worker_url: str | None
+    agent_token: str
+    webhook_secret: str
+
+
+@dataclass(frozen=True)
+class BootstrapAllOptions:
+    control_plane: ControlPlaneBootstrapOptions
+    agent: AgentBootstrapOptions
+    target_repository: TargetRepositoryOptions
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -110,9 +142,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = init_control_plane_environment(build_control_plane_options(args))
             print(format_install_result(result))
             return 0
+        if args.command == "bootstrap-control-plane":
+            result = bootstrap_control_plane_environment(build_control_plane_bootstrap_options(args))
+            print(format_control_plane_bootstrap_result(result))
+            return 0
         if args.command == "bootstrap-agent":
             result = bootstrap_agent_environment(build_agent_bootstrap_options(args))
             print(format_agent_bootstrap_result(result))
+            return 0
+        if args.command == "bootstrap-all":
+            result = bootstrap_all_environment(build_bootstrap_all_options(args))
+            print(format_bootstrap_all_result(result))
             return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -151,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_parser.add_argument("--force", action="store_true")
     control_plane_parser.add_argument("--dry-run", action="store_true")
 
+    bootstrap_control_plane_parser = subparsers.add_parser(
+        "bootstrap-control-plane",
+        help="Scaffold, provision, and deploy the Cloudflare Worker control plane.",
+    )
+    add_control_plane_bootstrap_arguments(bootstrap_control_plane_parser)
+
     agent_parser = subparsers.add_parser(
         "bootstrap-agent",
         help="Write a local polling-agent config for the Cloudflare control plane.",
@@ -163,6 +209,19 @@ def build_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument("--poll-interval-seconds", type=int, default=10)
     agent_parser.add_argument("--force", action="store_true")
     agent_parser.add_argument("--dry-run", action="store_true")
+
+    bootstrap_all_parser = subparsers.add_parser(
+        "bootstrap-all",
+        help="Set up the control plane, local agent, and target repository in one pass.",
+    )
+    add_control_plane_bootstrap_arguments(bootstrap_all_parser)
+    bootstrap_all_parser.add_argument("--repository", action="append", dest="repositories", default=[])
+    bootstrap_all_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"))
+    bootstrap_all_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH))
+    bootstrap_all_parser.add_argument("--poll-interval-seconds", type=int, default=10)
+    bootstrap_all_parser.add_argument("--target-repo", required=True, help="Path to the target repository root.")
+    bootstrap_all_parser.add_argument("--skip-config", action="store_true")
+    bootstrap_all_parser.add_argument("--skip-agents", action="store_true")
 
     return parser
 
@@ -180,6 +239,18 @@ def add_target_repository_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-agents", action="store_true", help="Do not write `AGENTS.md`.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing managed files.")
     parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing files.")
+
+
+def add_control_plane_bootstrap_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--target", required=True, help="Path to the control-plane project root.")
+    parser.add_argument("--worker-name", required=True, help="Cloudflare Worker name.")
+    parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot")
+    parser.add_argument("--github-app-id", required=True, help="GitHub App ID.")
+    parser.add_argument("--github-app-private-key-file", required=True, help="Path to the GitHub App PEM file.")
+    parser.add_argument("--agent-token", help="Optional fixed agent token. If omitted, one is generated.")
+    parser.add_argument("--webhook-secret", help="Optional fixed webhook secret. If omitted, one is generated.")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
 
 
 def build_doctor_options(args: argparse.Namespace) -> DoctorOptions:
@@ -211,6 +282,20 @@ def build_control_plane_options(args: argparse.Namespace) -> ControlPlaneOptions
     )
 
 
+def build_control_plane_bootstrap_options(args: argparse.Namespace) -> ControlPlaneBootstrapOptions:
+    return ControlPlaneBootstrapOptions(
+        target=Path(args.target).resolve(),
+        worker_name=args.worker_name,
+        bot_mention=args.bot_mention,
+        github_app_id=args.github_app_id,
+        github_app_private_key_file=Path(args.github_app_private_key_file).resolve(),
+        agent_token=getattr(args, "agent_token", None),
+        webhook_secret=getattr(args, "webhook_secret", None),
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+
+
 def build_agent_bootstrap_options(args: argparse.Namespace) -> AgentBootstrapOptions:
     return AgentBootstrapOptions(
         control_plane_url=args.control_plane_url.rstrip("/"),
@@ -221,6 +306,32 @@ def build_agent_bootstrap_options(args: argparse.Namespace) -> AgentBootstrapOpt
         poll_interval_seconds=args.poll_interval_seconds,
         force=args.force,
         dry_run=args.dry_run,
+    )
+
+
+def build_bootstrap_all_options(args: argparse.Namespace) -> BootstrapAllOptions:
+    control_plane = build_control_plane_bootstrap_options(args)
+    agent = AgentBootstrapOptions(
+        control_plane_url=f"https://{control_plane.worker_name}.workers.dev",
+        agent_token=args.agent_token or "",
+        repositories=list(args.repositories),
+        workspace_root=Path(args.workspace_root).resolve(),
+        config_path=Path(args.config_path).resolve(),
+        poll_interval_seconds=args.poll_interval_seconds,
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+    target_repository = TargetRepositoryOptions(
+        target=Path(args.target_repo).resolve(),
+        write_config=not args.skip_config,
+        write_agents=not args.skip_agents,
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+    return BootstrapAllOptions(
+        control_plane=control_plane,
+        agent=agent,
+        target_repository=target_repository,
     )
 
 
@@ -291,11 +402,91 @@ def init_control_plane_environment(options: ControlPlaneOptions) -> InstallManag
         target=target,
         operations=operations,
         next_steps=[
-            "Worker 디렉터리에서 `npm install` 실행",
-            "Cloudflare KV namespace를 만들고 `wrangler.jsonc`의 TASK_QUEUE id를 채우기",
-            "`npx wrangler secret put CONTROL_PLANE_AGENT_TOKEN` 등 필수 secret 등록",
-            "`npx wrangler deploy`로 배포",
+            "한 번에 진행하려면 `bootstrap-control-plane`을 사용하세요.",
+            "수동으로 할 때는 Worker 디렉터리에서 `npm install`을 실행하세요.",
+            "Cloudflare KV namespace를 만들고 `wrangler.jsonc`의 TASK_QUEUE id를 채우세요.",
+            "`npx wrangler secret put CONTROL_PLANE_AGENT_TOKEN` 등 필수 secret을 넣으세요.",
+            "`npx wrangler deploy`로 배포하세요.",
         ],
+    )
+
+
+def bootstrap_control_plane_environment(options: ControlPlaneBootstrapOptions) -> ControlPlaneBootstrapResult:
+    if not options.github_app_private_key_file.exists():
+        raise FileNotFoundError(f"GitHub App private key file not found: {options.github_app_private_key_file}")
+
+    install_result = init_control_plane_environment(
+        ControlPlaneOptions(
+            target=options.target,
+            worker_name=options.worker_name,
+            bot_mention=options.bot_mention,
+            force=options.force,
+            dry_run=options.dry_run,
+        )
+    )
+    generated_agent_token = options.agent_token or secrets.token_urlsafe(24)
+    generated_webhook_secret = options.webhook_secret or secrets.token_urlsafe(32)
+
+    operations: list[str] = []
+    if options.dry_run:
+        operations.extend(
+            [
+                "would_run: npm install",
+                "would_run: npx wrangler kv namespace create TASK_QUEUE --config wrangler.jsonc --update-config",
+                "would_set: CONTROL_PLANE_AGENT_TOKEN",
+                "would_set: GITHUB_WEBHOOK_SECRET",
+                "would_set: GITHUB_APP_ID",
+                "would_set: GITHUB_APP_PRIVATE_KEY",
+                "would_run: npx wrangler deploy --config wrangler.jsonc",
+            ]
+        )
+        return ControlPlaneBootstrapResult(
+            install_result=install_result,
+            operations=operations,
+            worker_url=f"https://{options.worker_name}.workers.dev",
+            agent_token=generated_agent_token,
+            webhook_secret=generated_webhook_secret,
+        )
+
+    ensure_command_available("npm")
+    ensure_command_available("npx")
+
+    run_checked_command(["npm", "install"], cwd=options.target)
+    operations.append("ran: npm install")
+
+    run_checked_command(
+        ["npx", "wrangler", "kv", "namespace", "create", "TASK_QUEUE", "--config", "wrangler.jsonc", "--update-config"],
+        cwd=options.target,
+    )
+    operations.append("ran: wrangler kv namespace create TASK_QUEUE")
+
+    run_wrangler_secret_put(options.target, "CONTROL_PLANE_AGENT_TOKEN", generated_agent_token)
+    run_wrangler_secret_put(options.target, "GITHUB_WEBHOOK_SECRET", generated_webhook_secret)
+    run_wrangler_secret_put(options.target, "GITHUB_APP_ID", options.github_app_id)
+    run_wrangler_secret_put(
+        options.target,
+        "GITHUB_APP_PRIVATE_KEY",
+        options.github_app_private_key_file.read_text(encoding="utf-8"),
+    )
+    operations.extend(
+        [
+            "set: CONTROL_PLANE_AGENT_TOKEN",
+            "set: GITHUB_WEBHOOK_SECRET",
+            "set: GITHUB_APP_ID",
+            "set: GITHUB_APP_PRIVATE_KEY",
+        ]
+    )
+
+    deploy_output = run_checked_command(["npx", "wrangler", "deploy", "--config", "wrangler.jsonc"], cwd=options.target)
+    operations.append("ran: wrangler deploy")
+    worker_url = extract_worker_url(deploy_output) or f"https://{options.worker_name}.workers.dev"
+
+    return ControlPlaneBootstrapResult(
+        install_result=install_result,
+        operations=operations,
+        worker_url=worker_url,
+        agent_token=generated_agent_token,
+        webhook_secret=generated_webhook_secret,
     )
 
 
@@ -333,6 +524,23 @@ def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstra
             "필요하면 Windows 작업 스케줄러나 서비스로 agent를 상시 실행",
         ],
     )
+
+
+def bootstrap_all_environment(options: BootstrapAllOptions) -> tuple[ControlPlaneBootstrapResult, AgentBootstrapResult, InstallManagerResult]:
+    control_plane_result = bootstrap_control_plane_environment(options.control_plane)
+    agent_options = AgentBootstrapOptions(
+        control_plane_url=control_plane_result.worker_url or f"https://{options.control_plane.worker_name}.workers.dev",
+        agent_token=control_plane_result.agent_token,
+        repositories=options.agent.repositories,
+        workspace_root=options.agent.workspace_root,
+        config_path=options.agent.config_path,
+        poll_interval_seconds=options.agent.poll_interval_seconds,
+        force=options.agent.force,
+        dry_run=options.agent.dry_run,
+    )
+    agent_result = bootstrap_agent_environment(agent_options)
+    target_result = init_target_repository(options.target_repository)
+    return control_plane_result, agent_result, target_result
 
 
 def run_doctor(options: DoctorOptions) -> DoctorResult:
@@ -390,6 +598,14 @@ def check_codex_auth() -> DoctorCheck:
     if not config_path.exists():
         missing.append(str(config_path))
     return DoctorCheck("Codex auth", "fail", f"누락: {', '.join(missing)}")
+
+
+def ensure_command_available(executable: str) -> None:
+    if shutil.which(executable):
+        return
+    if auto_install_command_if_missing(executable):
+        return
+    raise RuntimeError(f"`{executable}`를 찾지 못했습니다. 먼저 설치하거나 PATH를 확인하세요.")
 
 
 def check_control_plane_url(url: str) -> DoctorCheck:
@@ -486,6 +702,37 @@ def run_command(command: Sequence[str], *, input_text: str | None = None) -> sub
         errors="replace",
         check=False,
     )
+
+
+def run_checked_command(command: Sequence[str], *, cwd: Path, input_text: str | None = None) -> str:
+    completed = subprocess.run(
+        list(command),
+        input=input_text,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(cwd),
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"{' '.join(command)} 실패: {summarize_command_failure(completed)}")
+    return "\n".join(part for part in [completed.stdout, completed.stderr] if part)
+
+
+def run_wrangler_secret_put(target: Path, name: str, value: str) -> None:
+    run_checked_command(
+        ["npx", "wrangler", "secret", "put", name, "--config", "wrangler.jsonc"],
+        cwd=target,
+        input_text=value,
+    )
+
+
+def extract_worker_url(output: str) -> str | None:
+    match = re.search(r"https://[a-zA-Z0-9.-]+\.workers\.dev", output)
+    if match:
+        return match.group(0)
+    return None
 
 
 def detect_package_manager() -> str | None:
@@ -595,6 +842,40 @@ def format_doctor_result(result: DoctorResult) -> str:
     for check in result.checks:
         lines.append(f"- [{check.status}] {check.name}: {check.detail}")
     return "\n".join(lines)
+
+
+def format_control_plane_bootstrap_result(result: ControlPlaneBootstrapResult) -> str:
+    lines = [
+        format_install_result(result.install_result),
+        "",
+        "## 제어면 배포 결과",
+        "",
+        f"- Worker URL: `{result.worker_url or 'unknown'}`",
+        "- 수행 작업:",
+    ]
+    for operation in result.operations:
+        lines.append(f"  - {operation}")
+    lines.extend(
+        [
+            "",
+            "### 저장해둘 값",
+            f"- Agent token: `{result.agent_token}`",
+            f"- Webhook secret: `{result.webhook_secret}`",
+            f"- GitHub App webhook URL: `{(result.worker_url or 'https://<worker>.workers.dev')}/github/webhook`",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_bootstrap_all_result(result: tuple[ControlPlaneBootstrapResult, AgentBootstrapResult, InstallManagerResult]) -> str:
+    control_plane_result, agent_result, target_result = result
+    return "\n\n".join(
+        [
+            format_control_plane_bootstrap_result(control_plane_result),
+            format_agent_bootstrap_result(agent_result),
+            format_install_result(target_result),
+        ]
+    )
 
 
 if __name__ == "__main__":

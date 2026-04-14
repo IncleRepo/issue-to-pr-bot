@@ -7,11 +7,15 @@ from unittest.mock import patch
 
 from app.install_manager import (
     AgentBootstrapOptions,
+    BootstrapAllOptions,
+    ControlPlaneBootstrapOptions,
     ControlPlaneOptions,
     DoctorOptions,
     TargetRepositoryOptions,
     auto_install_command_if_missing,
+    bootstrap_all_environment,
     bootstrap_agent_environment,
+    bootstrap_control_plane_environment,
     init_control_plane_environment,
     init_target_repository,
     main,
@@ -40,6 +44,42 @@ class InstallManagerTest(unittest.TestCase):
             self.assertIn("@issue-to-pr-bot", (target / "wrangler.jsonc").read_text(encoding="utf-8"))
             self.assertEqual([operation.action for operation in result.operations], ["created", "created", "created", "created"])
 
+    @patch("app.install_manager.ensure_command_available")
+    @patch("app.install_manager.run_wrangler_secret_put")
+    @patch("app.install_manager.run_checked_command")
+    def test_bootstrap_control_plane_runs_deploy_steps(
+        self,
+        mock_run_checked_command,
+        mock_run_wrangler_secret_put,
+        _mock_ensure_command_available,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir)
+            pem_path = target / "app.pem"
+            pem_path.write_text("PRIVATE KEY", encoding="utf-8")
+            mock_run_checked_command.side_effect = [
+                "npm install ok",
+                "kv ok",
+                "Deployed to https://issue-to-pr-bot-control.example.workers.dev",
+            ]
+
+            result = bootstrap_control_plane_environment(
+                ControlPlaneBootstrapOptions(
+                    target=target,
+                    worker_name="issue-to-pr-bot-control",
+                    bot_mention="@issue-to-pr-bot",
+                    github_app_id="12345",
+                    github_app_private_key_file=pem_path,
+                    agent_token="agent-token",
+                    webhook_secret="webhook-secret",
+                )
+            )
+
+            self.assertEqual(result.worker_url, "https://issue-to-pr-bot-control.example.workers.dev")
+            self.assertEqual(result.agent_token, "agent-token")
+            self.assertEqual(result.webhook_secret, "webhook-secret")
+            self.assertEqual(mock_run_wrangler_secret_put.call_count, 4)
+
     def test_bootstrap_agent_environment_writes_local_agent_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -62,6 +102,77 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(config_data["repositories"], ["Acme/repo-a", "Acme/repo-b"])
             self.assertEqual(config_data["workspace_root"], str(workspace_root))
             self.assertEqual(result.operations[0].action, "created")
+
+    @patch("app.install_manager.bootstrap_control_plane_environment")
+    @patch("app.install_manager.bootstrap_agent_environment")
+    @patch("app.install_manager.init_target_repository")
+    def test_bootstrap_all_combines_three_steps(
+        self,
+        mock_init_target_repository,
+        mock_bootstrap_agent_environment,
+        mock_bootstrap_control_plane_environment,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "repo").mkdir()
+            mock_bootstrap_control_plane_environment.return_value = type(
+                "ControlPlaneBootstrapResultStub",
+                (),
+                {
+                    "worker_url": "https://issue-to-pr-bot-control.example.workers.dev",
+                    "agent_token": "agent-token",
+                    "webhook_secret": "webhook-secret",
+                    "install_result": init_control_plane_environment(
+                        ControlPlaneOptions(
+                            target=temp_path / "control",
+                            worker_name="issue-to-pr-bot-control",
+                            bot_mention="@bot",
+                            dry_run=True,
+                        )
+                    ),
+                    "operations": [],
+                },
+            )()
+            mock_bootstrap_agent_environment.return_value = bootstrap_agent_environment(
+                AgentBootstrapOptions(
+                    control_plane_url="https://issue-to-pr-bot-control.example.workers.dev",
+                    agent_token="agent-token",
+                    repositories=["Acme/repo"],
+                    workspace_root=temp_path / "workspaces",
+                    config_path=temp_path / "agent.json",
+                    dry_run=True,
+                )
+            )
+            mock_init_target_repository.return_value = init_target_repository(
+                TargetRepositoryOptions(target=temp_path / "repo", dry_run=True)
+            )
+
+            result = bootstrap_all_environment(
+                BootstrapAllOptions(
+                    control_plane=ControlPlaneBootstrapOptions(
+                        target=temp_path / "control",
+                        worker_name="issue-to-pr-bot-control",
+                        bot_mention="@bot",
+                        github_app_id="12345",
+                        github_app_private_key_file=temp_path / "app.pem",
+                        dry_run=True,
+                    ),
+                    agent=AgentBootstrapOptions(
+                        control_plane_url="https://issue-to-pr-bot-control.example.workers.dev",
+                        agent_token="",
+                        repositories=["Acme/repo"],
+                        workspace_root=temp_path / "workspaces",
+                        config_path=temp_path / "agent.json",
+                        dry_run=True,
+                    ),
+                    target_repository=TargetRepositoryOptions(target=temp_path / "repo", dry_run=True),
+                )
+            )
+
+            self.assertEqual(result[0].agent_token, "agent-token")
+            mock_bootstrap_control_plane_environment.assert_called_once()
+            mock_bootstrap_agent_environment.assert_called_once()
+            mock_init_target_repository.assert_called_once()
 
     def test_init_target_repository_writes_minimal_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,6 +223,50 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertFalse((target / ".issue-to-pr-bot.yml").exists())
             self.assertFalse((target / "AGENTS.md").exists())
+
+    @patch("app.install_manager.bootstrap_control_plane_environment")
+    def test_main_supports_bootstrap_control_plane_dry_run(self, mock_bootstrap_control_plane_environment) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pem_path = temp_path / "app.pem"
+            pem_path.write_text("PRIVATE KEY", encoding="utf-8")
+            mock_bootstrap_control_plane_environment.return_value = type(
+                "ControlPlaneBootstrapResultStub",
+                (),
+                {
+                    "install_result": init_control_plane_environment(
+                        ControlPlaneOptions(
+                            target=temp_path / "control",
+                            worker_name="issue-to-pr-bot-control",
+                            bot_mention="@bot",
+                            dry_run=True,
+                        )
+                    ),
+                    "operations": [],
+                    "worker_url": "https://issue-to-pr-bot-control.example.workers.dev",
+                    "agent_token": "agent-token",
+                    "webhook_secret": "webhook-secret",
+                },
+            )()
+
+            exit_code = main(
+                [
+                    "bootstrap-control-plane",
+                    "--target",
+                    str(temp_path / "control"),
+                    "--worker-name",
+                    "issue-to-pr-bot-control",
+                    "--bot-mention",
+                    "@bot",
+                    "--github-app-id",
+                    "12345",
+                    "--github-app-private-key-file",
+                    str(pem_path),
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
 
     @patch("app.install_manager.shutil.which")
     @patch("app.install_manager.run_command")
