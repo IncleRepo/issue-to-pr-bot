@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -39,6 +39,11 @@ DEFAULT_RUNNER_ROOT_CANDIDATES = (
 )
 LATEST_RUNNER_RELEASE_API = "https://api.github.com/repos/actions/runner/releases/latest"
 RUNNER_RELEASE_USER_AGENT = "issue-to-pr-bot-manager"
+DEFAULT_SUPPORT_ROOT = Path.home() / "issue-to-pr-bot-data"
+AUTO_INSTALL_PACKAGES = {
+    "gh": {"label": "GitHub CLI", "winget": "GitHub.cli", "choco": "gh"},
+    "git": {"label": "Git", "winget": "Git.Git", "choco": "git"},
+}
 CRITICAL_HOST_CHECKS = {
     "Python",
     "Git",
@@ -159,6 +164,12 @@ class RunnerArchiveSource:
     url: str
     name: str
     description: str
+
+
+@dataclass(frozen=True)
+class RepositorySupportPaths:
+    context_dir: Path
+    secrets_file: Path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -541,6 +552,126 @@ def build_install_next_steps(options: InstallManagerOptions, operations: list[Fi
     return steps
 
 
+def detect_package_manager() -> str | None:
+    if shutil.which("winget"):
+        return "winget"
+    if shutil.which("choco"):
+        return "choco"
+    return None
+
+
+def refresh_process_path() -> None:
+    if os.name != "nt":
+        return
+
+    machine = run_command(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','Machine')",
+        ]
+    )
+    user = run_command(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','User')",
+        ]
+    )
+    if machine.returncode != 0 and user.returncode != 0:
+        return
+
+    current_parts = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+    merged: list[str] = []
+    for raw in (machine.stdout, user.stdout, os.environ.get("PATH", "")):
+        for part in raw.split(os.pathsep):
+            normalized = part.strip()
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    if merged:
+        os.environ["PATH"] = os.pathsep.join(merged + [part for part in current_parts if part not in merged])
+
+
+def auto_install_command_if_missing(executable: str, *, dry_run: bool = False) -> bool:
+    if shutil.which(executable):
+        return False
+
+    package = AUTO_INSTALL_PACKAGES.get(executable)
+    if package is None:
+        return False
+
+    manager = detect_package_manager()
+    if manager is None:
+        return False
+
+    if manager == "winget":
+        command = [
+            "winget",
+            "install",
+            "--id",
+            package["winget"],
+            "-e",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ]
+    else:
+        command = ["choco", "install", package["choco"], "-y"]
+
+    label = package["label"]
+    if dry_run:
+        print(f"{label} 자동 설치 예정: {' '.join(command)}")
+        return True
+
+    print(f"{label} 자동 설치 시도: {' '.join(command)}")
+    completed = run_command(command)
+    if completed.returncode != 0:
+        raise RuntimeError(f"{label} 자동 설치 실패: {summarize_command_failure(completed)}")
+
+    refresh_process_path()
+    if not shutil.which(executable):
+        raise RuntimeError(f"{label} 설치 후에도 `{executable}`를 찾지 못했습니다. 새 터미널을 열고 다시 시도하세요.")
+    return True
+
+
+def ensure_bootstrap_tooling(
+    *,
+    requires_github_cli: bool,
+    dry_run: bool,
+) -> list[str]:
+    attempted: list[str] = []
+
+    if auto_install_command_if_missing("git", dry_run=dry_run):
+        attempted.append("git")
+
+    if requires_github_cli and auto_install_command_if_missing("gh", dry_run=dry_run):
+        attempted.append("gh")
+
+    return attempted
+
+
+def build_repository_support_paths(repository: str) -> RepositorySupportPaths:
+    slug = repository.replace("/", "__")
+    base = DEFAULT_SUPPORT_ROOT / slug
+    return RepositorySupportPaths(
+        context_dir=base / "context",
+        secrets_file=base / "secrets.env",
+    )
+
+
+def ensure_repository_support_paths(repository: str, *, dry_run: bool) -> RepositorySupportPaths:
+    paths = build_repository_support_paths(repository)
+    if dry_run:
+        return paths
+
+    paths.context_dir.mkdir(parents=True, exist_ok=True)
+    paths.secrets_file.parent.mkdir(parents=True, exist_ok=True)
+    if not paths.secrets_file.exists():
+        paths.secrets_file.write_text("", encoding="utf-8")
+    return paths
+
+
 def run_doctor(options: DoctorOptions) -> DoctorResult:
     checks: list[DoctorCheck] = []
     checks.append(probe_command("Python", "python", ["--version"]))
@@ -579,11 +710,15 @@ def probe_command(
     required: bool = True,
 ) -> DoctorCheck:
     command_path = shutil.which(executable)
+    probe_executable = executable
+    if executable == "python" and not command_path and Path(sys.executable).exists():
+        command_path = sys.executable
+        probe_executable = sys.executable
     if not command_path:
         status = "fail" if required else "warn"
         return DoctorCheck(name, status, f"`{executable}`가 PATH에 없습니다.")
 
-    completed = run_command([executable, *version_args])
+    completed = run_command([probe_executable, *version_args])
     if completed.returncode != 0:
         status = "fail" if required else "warn"
         return DoctorCheck(name, status, summarize_command_failure(completed))
@@ -743,8 +878,11 @@ def check_repository_settings(repository: str) -> list[DoctorCheck]:
 def configure_repository_settings(options: GithubConfigurationOptions) -> GithubConfigurationResult:
     if not options.bot_app_private_key_file.exists():
         raise FileNotFoundError(f"Private key file does not exist: {options.bot_app_private_key_file}")
+    ensure_bootstrap_tooling(requires_github_cli=True, dry_run=options.dry_run)
     if not shutil.which("gh"):
         raise RuntimeError("`gh`가 PATH에 없습니다. GitHub CLI를 먼저 설치하고 로그인하세요.")
+
+    support_paths = ensure_repository_support_paths(options.repository, dry_run=options.dry_run)
 
     operations: list[GithubConfigurationOperation] = []
     operations.append(
@@ -758,6 +896,20 @@ def configure_repository_settings(options: GithubConfigurationOptions) -> Github
         run_gh_setting_command(
             ["gh", "variable", "set", "BOT_APP_ID", "-R", options.repository, "--body", options.bot_app_id],
             "BOT_APP_ID",
+            dry_run=options.dry_run,
+        )
+    )
+    operations.append(
+        run_gh_setting_command(
+            ["gh", "variable", "set", "BOT_CONTEXT_DIR_HOST", "-R", options.repository, "--body", str(support_paths.context_dir)],
+            "BOT_CONTEXT_DIR_HOST",
+            dry_run=options.dry_run,
+        )
+    )
+    operations.append(
+        run_gh_setting_command(
+            ["gh", "variable", "set", "BOT_SECRETS_FILE_HOST", "-R", options.repository, "--body", str(support_paths.secrets_file)],
+            "BOT_SECRETS_FILE_HOST",
             dry_run=options.dry_run,
         )
     )
@@ -794,8 +946,11 @@ def run_gh_setting_command(
 
 
 def build_github_configuration_next_steps(options: GithubConfigurationOptions) -> list[str]:
+    support_paths = build_repository_support_paths(options.repository)
     steps = [
         "GitHub App이 대상 저장소에 설치되어 있는지 확인하세요.",
+        f"기본 외부 context 폴더: `{support_paths.context_dir}`",
+        f"기본 secret env 파일: `{support_paths.secrets_file}`",
         "워크플로 파일이 이미 커밋되어 있으면 이슈 댓글에서 멘션 테스트를 해보세요.",
     ]
     if options.dry_run:
@@ -808,6 +963,10 @@ def bootstrap_repository_environment(
     doctor_options: DoctorOptions,
     github_options: GithubConfigurationOptions | None,
 ) -> BootstrapResult:
+    ensure_bootstrap_tooling(
+        requires_github_cli=github_options is not None or doctor_options.repository is not None,
+        dry_run=install_options.dry_run,
+    )
     install_result = install_repository_environment(install_options)
     github_result = configure_repository_settings(github_options) if github_options is not None else None
     doctor_result = run_doctor(doctor_options)
@@ -819,6 +978,13 @@ def bootstrap_repository_environment(
 
 
 def bootstrap_host_environment(options: HostBootstrapOptions) -> HostBootstrapResult:
+    ensure_bootstrap_tooling(
+        requires_github_cli=(
+            options.runner_token is None
+            and (options.repository is not None or options.organization is not None)
+        ),
+        dry_run=options.dry_run,
+    )
     doctor_result = run_doctor(DoctorOptions(repository=options.repository, runner_root=options.runner_root))
     if not options.dry_run:
         ensure_host_prerequisites(doctor_result)
@@ -1149,3 +1315,4 @@ def relative_to_target(path: Path, target: Path) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

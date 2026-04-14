@@ -12,11 +12,13 @@ from app.install_manager import (
     GithubConfigurationOptions,
     HostBootstrapOptions,
     InstallManagerOptions,
+    auto_install_command_if_missing,
     bootstrap_repository_environment,
     bootstrap_host_environment,
     configure_repository_settings,
     install_repository_environment,
     main,
+    probe_command,
     render_workflow_template,
     run_doctor,
 )
@@ -182,14 +184,32 @@ class InstallManagerTest(unittest.TestCase):
         self.assertEqual(status_by_name["Repository variables"], "pass")
         self.assertEqual(status_by_name["Repository secrets"], "pass")
 
+    @patch("app.install_manager.ensure_repository_support_paths")
+    @patch("app.install_manager.ensure_bootstrap_tooling")
     @patch("app.install_manager.shutil.which", return_value="C:/gh.exe")
     @patch("app.install_manager.run_command")
-    def test_configure_repository_settings_updates_variables_and_secret(self, mock_run_command, _mock_which) -> None:
+    def test_configure_repository_settings_updates_variables_and_secret(
+        self,
+        mock_run_command,
+        _mock_which,
+        mock_ensure_bootstrap_tooling,
+        mock_ensure_repository_support_paths,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             key_file = Path(temp_dir) / "app.pem"
             key_file.write_text("PRIVATE KEY\n", encoding="utf-8")
+            mock_ensure_repository_support_paths.return_value = type(
+                "SupportPaths",
+                (),
+                {
+                    "context_dir": Path("C:/issue-to-pr-bot-data/Acme__example/context"),
+                    "secrets_file": Path("C:/issue-to-pr-bot-data/Acme__example/secrets.env"),
+                },
+            )()
 
             mock_run_command.side_effect = [
+                _completed(),
+                _completed(),
                 _completed(),
                 _completed(),
                 _completed(),
@@ -204,11 +224,14 @@ class InstallManagerTest(unittest.TestCase):
                 )
             )
 
-        self.assertEqual([operation.action for operation in result.operations], ["set", "set", "set"])
+        self.assertEqual([operation.action for operation in result.operations], ["set", "set", "set", "set", "set"])
+        mock_ensure_bootstrap_tooling.assert_called_once_with(requires_github_cli=True, dry_run=False)
         self.assertEqual(mock_run_command.call_args_list[0].args[0][:4], ["gh", "variable", "set", "BOT_MENTION"])
         self.assertEqual(mock_run_command.call_args_list[1].args[0][:4], ["gh", "variable", "set", "BOT_APP_ID"])
-        self.assertEqual(mock_run_command.call_args_list[2].args[0][:4], ["gh", "secret", "set", "BOT_APP_PRIVATE_KEY"])
-        self.assertEqual(mock_run_command.call_args_list[2].kwargs["input_text"], "PRIVATE KEY\n")
+        self.assertEqual(mock_run_command.call_args_list[2].args[0][:4], ["gh", "variable", "set", "BOT_CONTEXT_DIR_HOST"])
+        self.assertEqual(mock_run_command.call_args_list[3].args[0][:4], ["gh", "variable", "set", "BOT_SECRETS_FILE_HOST"])
+        self.assertEqual(mock_run_command.call_args_list[4].args[0][:4], ["gh", "secret", "set", "BOT_APP_PRIVATE_KEY"])
+        self.assertEqual(mock_run_command.call_args_list[4].kwargs["input_text"], "PRIVATE KEY\n")
 
     @patch("app.install_manager.run_doctor")
     @patch("app.install_manager.configure_repository_settings")
@@ -270,8 +293,10 @@ class InstallManagerTest(unittest.TestCase):
     @patch("app.install_manager.download_runner_archive")
     @patch("app.install_manager.resolve_runner_archive_source")
     @patch("app.install_manager.run_doctor")
+    @patch("app.install_manager.ensure_bootstrap_tooling")
     def test_bootstrap_host_downloads_and_registers_runner(
         self,
+        mock_ensure_bootstrap_tooling,
         mock_doctor,
         mock_resolve_runner_archive_source,
         mock_download_runner_archive,
@@ -318,11 +343,45 @@ class InstallManagerTest(unittest.TestCase):
             )
 
         self.assertEqual(result.operations[0].action, "prepared")
+        mock_ensure_bootstrap_tooling.assert_called_once_with(requires_github_cli=True, dry_run=False)
         self.assertTrue(any(operation.name == "Runner download" for operation in result.operations))
         self.assertTrue(any(operation.name == "Runner registration" and operation.action == "configured" for operation in result.operations))
         mock_download_runner_archive.assert_called_once()
         mock_configure_runner.assert_called_once()
         mock_ensure_runner_service_started.assert_called_once()
+
+    @patch("app.install_manager.shutil.which")
+    @patch("app.install_manager.run_command")
+    def test_probe_command_uses_current_python_when_python_alias_is_missing(self, mock_run_command, mock_which) -> None:
+        mock_which.side_effect = lambda name: None if name == "python" else f"C:/{name}.exe"
+        mock_run_command.return_value = _completed(stdout="Python 3.11.9\n")
+
+        result = probe_command("Python", "python", ["--version"])
+
+        self.assertEqual(result.status, "pass")
+        self.assertIn("Python 3.11.9", result.detail)
+
+    @patch("app.install_manager.refresh_process_path")
+    @patch("app.install_manager.run_command")
+    @patch("app.install_manager.detect_package_manager", return_value="winget")
+    @patch("app.install_manager.shutil.which")
+    def test_auto_install_command_if_missing_uses_winget(
+        self,
+        mock_which,
+        _mock_detect_package_manager,
+        mock_run_command,
+        _mock_refresh_process_path,
+    ) -> None:
+        mock_which.side_effect = [None, "C:/Program Files/GitHub CLI/gh.exe"]
+        mock_run_command.return_value = _completed()
+
+        installed = auto_install_command_if_missing("gh")
+
+        self.assertTrue(installed)
+        self.assertEqual(
+            mock_run_command.call_args.args[0][:4],
+            ["winget", "install", "--id", "GitHub.cli"],
+        )
 
 
 def _completed(*, stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:

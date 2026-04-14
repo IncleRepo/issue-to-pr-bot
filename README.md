@@ -110,6 +110,7 @@ issue-to-pr-bot-manager bootstrap-host `
 이 명령이 하는 일:
 
 - Python / Git / Docker / Codex / Codex 로그인 상태 확인
+- Git, `gh`가 없으면 자동 설치 시도
 - runner 바이너리가 없으면 Windows runner 다운로드 및 압축 해제
 - runner 등록 토큰이 없으면 `gh`로 자동 발급 시도
 - self-hosted runner 등록
@@ -174,6 +175,8 @@ issue-to-pr-bot-manager bootstrap `
 - 대상 저장소 workflow 설치
 - 최소 설정 파일 생성
 - GitHub 변수/시크릿 등록
+- `gh`가 없으면 자동 설치 시도
+- 저장소별 기본 외부 context 폴더와 secret env 파일 경로 자동 준비
 - 로컬 머신 준비 상태 진단
 
 호스트 쪽을 먼저 준비하고 싶다면:
@@ -211,6 +214,20 @@ issue-to-pr-bot-manager configure-github `
   --bot-app-id 123456 `
   --bot-app-private-key-file C:\keys\my-app.pem
 ```
+
+`bootstrap` 또는 `configure-github`를 쓰면 기본으로 아래 값도 같이 잡습니다.
+
+- `BOT_CONTEXT_DIR_HOST`
+- `BOT_SECRETS_FILE_HOST`
+
+기본 경로 예시:
+
+```text
+C:\Users\<내계정>\issue-to-pr-bot-data\<owner>__<repo>\context
+C:\Users\<내계정>\issue-to-pr-bot-data\<owner>__<repo>\secrets.env
+```
+
+즉 처음에는 이 경로를 그냥 그대로 써도 됩니다.
 
 ## 5. 대상 저장소에 실제로 생기는 파일
 
