@@ -35,6 +35,7 @@ def run_codex_prompt(
         cwd=workspace,
         input=prompt,
         text=True,
+        encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
@@ -46,7 +47,8 @@ def run_codex_prompt(
         print(format_provider_output(output))
 
     if result.returncode != 0:
-        raise RuntimeError(f"Codex execution failed ({result.returncode})")
+        detail = format_provider_output(output) if output.strip() else "(no codex output)"
+        raise RuntimeError(f"Codex execution failed ({result.returncode})\n{detail}")
 
     if output_last_message and output_last_message.exists():
         return ProviderRunResult(

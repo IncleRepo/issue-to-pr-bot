@@ -94,7 +94,7 @@ def infer_explicit_metadata(documents: dict[str, str]) -> dict[str, list[str] | 
         "milestone": None,
     }
     for text in documents.values():
-        for line in text.splitlines():
+        for line in strip_markdown_code_blocks(text).splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
@@ -110,7 +110,7 @@ def infer_explicit_metadata(documents: dict[str, str]) -> dict[str, list[str] | 
                 else:
                     values[key] = dedupe(values[key] + parsed)
 
-        for section in extract_markdown_sections(text):
+        for section in extract_markdown_sections(strip_markdown_code_blocks(text)):
             heading = section["heading"].strip().lower()
             parsed_values = parse_metadata_values(section["body"])
             for key, candidates in HEADING_MATCHERS.items():
@@ -122,6 +122,19 @@ def infer_explicit_metadata(documents: dict[str, str]) -> dict[str, list[str] | 
                     else:
                         values[key] = dedupe(values[key] + parsed_values)
     return values
+
+
+def strip_markdown_code_blocks(text: str) -> str:
+    cleaned_lines: list[str] = []
+    in_fenced_block = False
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            in_fenced_block = not in_fenced_block
+            continue
+        if in_fenced_block:
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
 
 
 def parse_metadata_values(raw_text: str) -> list[str]:
