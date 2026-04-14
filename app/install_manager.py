@@ -165,61 +165,61 @@ def main(argv: Sequence[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="issue-to-pr-bot-manager",
-        description="Installer and operations manager for the Cloudflare Worker + local agent architecture.",
+        description="Cloudflare Worker + 로컬 agent 구조를 설치하고 운영하는 중앙 매니저입니다.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor_parser = subparsers.add_parser(
         "doctor",
-        help="Check local prerequisites for the control-plane and agent architecture.",
+        help="현재 PC와 설정이 실행 가능한 상태인지 점검합니다.",
     )
     add_doctor_arguments(doctor_parser)
 
     init_target_parser = subparsers.add_parser(
         "init-target-repo",
-        help="Write minimal non-Actions bot files into a target repository.",
+        help="대상 저장소에 최소 봇 설정 파일을 생성합니다.",
     )
     add_target_repository_arguments(init_target_parser)
 
     control_plane_parser = subparsers.add_parser(
         "init-control-plane",
-        help="Scaffold a Cloudflare Worker control-plane project.",
+        help="Cloudflare Worker 제어면 프로젝트 뼈대를 생성합니다.",
     )
-    control_plane_parser.add_argument("--target", required=True, help="Path to write the Worker project into.")
-    control_plane_parser.add_argument("--worker-name", required=True, help="Cloudflare Worker name.")
-    control_plane_parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot")
+    control_plane_parser.add_argument("--target", required=True, help="Worker 프로젝트를 생성할 경로입니다.")
+    control_plane_parser.add_argument("--worker-name", required=True, help="Cloudflare Worker 이름입니다.")
+    control_plane_parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot", help="댓글에서 사용할 봇 멘션입니다.")
     control_plane_parser.add_argument("--force", action="store_true")
     control_plane_parser.add_argument("--dry-run", action="store_true")
 
     bootstrap_control_plane_parser = subparsers.add_parser(
         "bootstrap-control-plane",
-        help="Scaffold, provision, and deploy the Cloudflare Worker control plane.",
+        help="제어면 프로젝트 생성부터 secret 등록, 배포까지 한 번에 진행합니다.",
     )
     add_control_plane_bootstrap_arguments(bootstrap_control_plane_parser)
 
     agent_parser = subparsers.add_parser(
         "bootstrap-agent",
-        help="Write a local polling-agent config for the Cloudflare control plane.",
+        help="로컬 polling agent 설정 파일을 생성합니다.",
     )
-    agent_parser.add_argument("--control-plane-url", required=True)
-    agent_parser.add_argument("--agent-token", required=True)
-    agent_parser.add_argument("--repository", action="append", dest="repositories", default=[])
-    agent_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"))
-    agent_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH))
-    agent_parser.add_argument("--poll-interval-seconds", type=int, default=10)
+    agent_parser.add_argument("--control-plane-url", required=True, help="배포된 제어면 Worker URL입니다.")
+    agent_parser.add_argument("--agent-token", required=True, help="제어면과 통신할 때 사용할 agent 토큰입니다.")
+    agent_parser.add_argument("--repository", action="append", dest="repositories", default=[], help="agent가 처리할 GitHub 저장소입니다. 여러 번 지정할 수 있습니다.")
+    agent_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"), help="agent가 작업용 저장소를 내려받을 루트 경로입니다.")
+    agent_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH), help="agent 설정 파일을 저장할 경로입니다.")
+    agent_parser.add_argument("--poll-interval-seconds", type=int, default=10, help="제어면을 다시 조회할 주기(초)입니다.")
     agent_parser.add_argument("--force", action="store_true")
     agent_parser.add_argument("--dry-run", action="store_true")
 
     bootstrap_all_parser = subparsers.add_parser(
         "bootstrap-all",
-        help="Set up the control plane, local agent, and target repository in one pass.",
+        help="제어면, 로컬 agent, 대상 저장소 초기화를 한 번에 진행합니다.",
     )
     add_control_plane_bootstrap_arguments(bootstrap_all_parser)
-    bootstrap_all_parser.add_argument("--repository", action="append", dest="repositories", default=[])
-    bootstrap_all_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"))
-    bootstrap_all_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH))
-    bootstrap_all_parser.add_argument("--poll-interval-seconds", type=int, default=10)
-    bootstrap_all_parser.add_argument("--target-repo", required=True, help="Path to the target repository root.")
+    bootstrap_all_parser.add_argument("--repository", action="append", dest="repositories", default=[], help="agent가 처리할 GitHub 저장소입니다. 여러 번 지정할 수 있습니다.")
+    bootstrap_all_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"), help="agent가 작업용 저장소를 내려받을 루트 경로입니다.")
+    bootstrap_all_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH), help="agent 설정 파일을 저장할 경로입니다.")
+    bootstrap_all_parser.add_argument("--poll-interval-seconds", type=int, default=10, help="제어면을 다시 조회할 주기(초)입니다.")
+    bootstrap_all_parser.add_argument("--target-repo", required=True, help="초기화할 대상 저장소 루트 경로입니다.")
     bootstrap_all_parser.add_argument("--skip-config", action="store_true")
     bootstrap_all_parser.add_argument("--skip-agents", action="store_true")
 
@@ -227,28 +227,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def add_doctor_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--target", help="Optional target repository root to inspect.")
-    parser.add_argument("--workspace-root", help="Optional workspace root for the local agent.")
-    parser.add_argument("--control-plane-url", help="Optional control-plane URL to validate.")
-    parser.add_argument("--config-path", help="Optional agent config path to validate.")
+    parser.add_argument("--target", help="추가로 점검할 대상 저장소 루트 경로입니다.")
+    parser.add_argument("--workspace-root", help="추가로 점검할 로컬 agent 작업 루트 경로입니다.")
+    parser.add_argument("--control-plane-url", help="추가로 점검할 제어면 Worker URL입니다.")
+    parser.add_argument("--config-path", help="추가로 점검할 agent 설정 파일 경로입니다.")
 
 
 def add_target_repository_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--target", required=True, help="Path to the target repository root.")
-    parser.add_argument("--skip-config", action="store_true", help="Do not write `.issue-to-pr-bot.yml`.")
-    parser.add_argument("--skip-agents", action="store_true", help="Do not write `AGENTS.md`.")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing managed files.")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing files.")
+    parser.add_argument("--target", required=True, help="대상 저장소 루트 경로입니다.")
+    parser.add_argument("--skip-config", action="store_true", help="`.issue-to-pr-bot.yml` 파일 생성을 건너뜁니다.")
+    parser.add_argument("--skip-agents", action="store_true", help="`AGENTS.md` 파일 생성을 건너뜁니다.")
+    parser.add_argument("--force", action="store_true", help="기존 관리 파일이 있어도 덮어씁니다.")
+    parser.add_argument("--dry-run", action="store_true", help="실제 파일을 쓰지 않고 변경 예정 내용만 출력합니다.")
 
 
 def add_control_plane_bootstrap_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--target", required=True, help="Path to the control-plane project root.")
-    parser.add_argument("--worker-name", required=True, help="Cloudflare Worker name.")
-    parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot")
-    parser.add_argument("--github-app-id", required=True, help="GitHub App ID.")
-    parser.add_argument("--github-app-private-key-file", required=True, help="Path to the GitHub App PEM file.")
-    parser.add_argument("--agent-token", help="Optional fixed agent token. If omitted, one is generated.")
-    parser.add_argument("--webhook-secret", help="Optional fixed webhook secret. If omitted, one is generated.")
+    parser.add_argument("--target", required=True, help="제어면 프로젝트 루트 경로입니다.")
+    parser.add_argument("--worker-name", required=True, help="Cloudflare Worker 이름입니다.")
+    parser.add_argument("--bot-mention", default="@incle-issue-to-pr-bot", help="댓글에서 사용할 봇 멘션입니다.")
+    parser.add_argument("--github-app-id", required=True, help="GitHub App ID입니다.")
+    parser.add_argument("--github-app-private-key-file", required=True, help="GitHub App PEM 파일 경로입니다.")
+    parser.add_argument("--agent-token", help="고정 agent 토큰이 필요하면 직접 지정합니다. 비우면 자동 생성합니다.")
+    parser.add_argument("--webhook-secret", help="고정 webhook secret이 필요하면 직접 지정합니다. 비우면 자동 생성합니다.")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
@@ -432,12 +432,12 @@ def bootstrap_control_plane_environment(options: ControlPlaneBootstrapOptions) -
         operations.extend(
             [
                 "would_run: npm install",
-                "would_run: npx wrangler kv namespace create TASK_QUEUE --config wrangler.jsonc --update-config",
+            f"would_run: {' '.join(wrangler_command_prefix())} kv namespace create TASK_QUEUE --config wrangler.jsonc --update-config",
                 "would_set: CONTROL_PLANE_AGENT_TOKEN",
                 "would_set: GITHUB_WEBHOOK_SECRET",
                 "would_set: GITHUB_APP_ID",
                 "would_set: GITHUB_APP_PRIVATE_KEY",
-                "would_run: npx wrangler deploy --config wrangler.jsonc",
+            f"would_run: {' '.join(wrangler_command_prefix())} deploy --config wrangler.jsonc",
             ]
         )
         return ControlPlaneBootstrapResult(
@@ -454,10 +454,7 @@ def bootstrap_control_plane_environment(options: ControlPlaneBootstrapOptions) -
     run_checked_command(["npm", "install"], cwd=options.target)
     operations.append("ran: npm install")
 
-    run_checked_command(
-        ["npx", "wrangler", "kv", "namespace", "create", "TASK_QUEUE", "--config", "wrangler.jsonc", "--update-config"],
-        cwd=options.target,
-    )
+    ensure_task_queue_namespace(options.target)
     operations.append("ran: wrangler kv namespace create TASK_QUEUE")
 
     run_wrangler_secret_put(options.target, "CONTROL_PLANE_AGENT_TOKEN", generated_agent_token)
@@ -477,7 +474,7 @@ def bootstrap_control_plane_environment(options: ControlPlaneBootstrapOptions) -
         ]
     )
 
-    deploy_output = run_checked_command(["npx", "wrangler", "deploy", "--config", "wrangler.jsonc"], cwd=options.target)
+    deploy_output = run_checked_command([*wrangler_command_prefix(), "deploy", "--config", "wrangler.jsonc"], cwd=options.target)
     operations.append("ran: wrangler deploy")
     worker_url = extract_worker_url(deploy_output) or f"https://{options.worker_name}.workers.dev"
 
@@ -693,8 +690,9 @@ def resolve_codex_home() -> Path:
 
 
 def run_command(command: Sequence[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    resolved = resolve_subprocess_command(command)
     return subprocess.run(
-        list(command),
+        resolved,
         input=input_text,
         capture_output=True,
         text=True,
@@ -705,8 +703,9 @@ def run_command(command: Sequence[str], *, input_text: str | None = None) -> sub
 
 
 def run_checked_command(command: Sequence[str], *, cwd: Path, input_text: str | None = None) -> str:
+    resolved = resolve_subprocess_command(command)
     completed = subprocess.run(
-        list(command),
+        resolved,
         input=input_text,
         capture_output=True,
         text=True,
@@ -722,10 +721,47 @@ def run_checked_command(command: Sequence[str], *, cwd: Path, input_text: str | 
 
 def run_wrangler_secret_put(target: Path, name: str, value: str) -> None:
     run_checked_command(
-        ["npx", "wrangler", "secret", "put", name, "--config", "wrangler.jsonc"],
+        [*wrangler_command_prefix(), "secret", "put", name, "--config", "wrangler.jsonc"],
         cwd=target,
         input_text=value,
     )
+
+
+def wrangler_command_prefix() -> list[str]:
+    if shutil.which("npx"):
+        return ["npx", "wrangler"]
+    return ["npm", "exec", "--", "wrangler"]
+
+
+def ensure_task_queue_namespace(target: Path) -> None:
+    command = [*wrangler_command_prefix(), "kv", "namespace", "create", "TASK_QUEUE", "--config", "wrangler.jsonc", "--update-config"]
+    try:
+        run_checked_command(command, cwd=target)
+        return
+    except RuntimeError as exc:
+        if "already exists" not in str(exc):
+            raise
+
+    listed = run_checked_command([*wrangler_command_prefix(), "kv", "namespace", "list", "--config", "wrangler.jsonc"], cwd=target)
+    namespaces = json.loads(listed)
+    existing = next((item for item in namespaces if item.get("title") == "TASK_QUEUE"), None)
+    if not existing or not existing.get("id"):
+        raise RuntimeError("기존 TASK_QUEUE KV namespace를 찾지 못했습니다.")
+    update_kv_namespace_binding(target / "wrangler.jsonc", existing["id"])
+
+
+def update_kv_namespace_binding(config_path: Path, namespace_id: str) -> None:
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["kv_namespaces"] = [{"binding": "TASK_QUEUE", "id": namespace_id}]
+    config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def resolve_subprocess_command(command: Sequence[str]) -> list[str]:
+    resolved = list(command)
+    executable_path = shutil.which(resolved[0])
+    if executable_path:
+        resolved[0] = executable_path
+    return resolved
 
 
 def extract_worker_url(output: str) -> str | None:
