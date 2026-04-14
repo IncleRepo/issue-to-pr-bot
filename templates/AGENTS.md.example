@@ -29,3 +29,16 @@ python -m unittest discover -s tests
 - Do not add `Required Secrets` unless the repository really needs them.
 - Do not add `Required Context` unless the bot must stop without those files.
 - Start simple and tighten the rules only after the repository workflow is stable.
+
+## Optional Metadata
+
+Use this only when the repository already has a stable convention for labels, assignees, reviewers, or milestones.
+
+```md
+Issue labels: `bug`
+PR labels: `automation`, `bot`
+Assignees: `@alice`
+Reviewers: `@bob`
+Team reviewers: `@my-org/backend`
+Milestone: `Sprint 1`
+```
