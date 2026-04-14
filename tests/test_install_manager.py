@@ -16,6 +16,7 @@ from app.install_manager import (
     bootstrap_all_environment,
     bootstrap_agent_environment,
     bootstrap_control_plane_environment,
+    build_agent_launch_command,
     init_control_plane_environment,
     init_target_repository,
     main,
@@ -80,11 +81,13 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(result.webhook_secret, "webhook-secret")
             self.assertEqual(mock_run_wrangler_secret_put.call_count, 4)
 
-    def test_bootstrap_agent_environment_writes_local_agent_config(self) -> None:
+    @patch("app.install_manager.register_agent_scheduled_task", return_value="created")
+    def test_bootstrap_agent_environment_writes_local_agent_config(self, _mock_register_task) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             config_path = temp_path / "agent/agent-config.json"
             workspace_root = temp_path / "workspaces"
+            log_path = temp_path / "logs/agent.log"
 
             result = bootstrap_agent_environment(
                 AgentBootstrapOptions(
@@ -93,6 +96,7 @@ class InstallManagerTest(unittest.TestCase):
                     repositories=["Acme/repo-a", "Acme/repo-b"],
                     workspace_root=workspace_root,
                     config_path=config_path,
+                    log_path=log_path,
                 )
             )
 
@@ -101,7 +105,15 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(config_data["agent_token"], "token-123")
             self.assertEqual(config_data["repositories"], ["Acme/repo-a", "Acme/repo-b"])
             self.assertEqual(config_data["workspace_root"], str(workspace_root))
+            self.assertEqual(config_data["log_path"], str(log_path))
             self.assertEqual(result.operations[0].action, "created")
+            self.assertEqual(result.task_name, "issue-to-pr-bot-agent")
+
+    @patch("app.install_manager.shutil.which", return_value=r"C:\venv\Scripts\issue-to-pr-bot-agent.exe")
+    def test_build_agent_launch_command_prefers_console_script(self, _mock_which) -> None:
+        command = build_agent_launch_command(Path(r"C:\agent\config.json"))
+        self.assertIn(r'"C:\venv\Scripts\issue-to-pr-bot-agent.exe"', command)
+        self.assertIn(r'--config "C:\agent\config.json"', command)
 
     @patch("app.install_manager.bootstrap_control_plane_environment")
     @patch("app.install_manager.bootstrap_agent_environment")

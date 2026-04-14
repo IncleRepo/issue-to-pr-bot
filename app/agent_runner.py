@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -30,6 +31,7 @@ class AgentConfig:
     workspace_root: Path
     poll_interval_seconds: int = 10
     repositories: list[str] | None = None
+    log_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -47,21 +49,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
+        config = load_agent_config(Path(args.config))
         if args.command == "run-once":
-            config = load_agent_config(Path(args.config))
             task = claim_task(config)
             if not task:
-                print("처리할 작업이 없습니다.")
+                log_message(config, "처리할 작업이 없습니다.")
                 return 0
             run_claimed_task(config, task)
             return 0
 
         if args.command == "serve":
-            config = load_agent_config(Path(args.config))
             run_agent_loop(config)
             return 0
     except Exception as error:
-        print(f"Error: {error}")
+        config_path = Path(args.config) if getattr(args, "config", None) else None
+        log_path = try_resolve_log_path(config_path) if config_path else None
+        log_message(None, f"Error: {error}", log_path=log_path)
         return 1
 
     parser.error(f"Unsupported command: {args.command}")
@@ -71,14 +74,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="issue-to-pr-bot-agent",
-        description="Local polling agent that executes issue-to-pr-bot tasks without GitHub Actions.",
+        description="Cloudflare Worker 제어면과 통신하며 로컬에서 실제 작업을 수행하는 agent입니다.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_once = subparsers.add_parser("run-once", help="Claim one task and execute it.")
+    run_once = subparsers.add_parser("run-once", help="작업 하나만 가져와 실행합니다.")
     run_once.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
 
-    serve = subparsers.add_parser("serve", help="Keep polling and execute tasks continuously.")
+    serve = subparsers.add_parser("serve", help="계속 polling 하면서 작업을 처리합니다.")
     serve.add_argument("--config", default=str(DEFAULT_AGENT_CONFIG_PATH))
 
     return parser
@@ -93,11 +96,12 @@ def load_agent_config(path: Path) -> AgentConfig:
         workspace_root=Path(str(data["workspace_root"])),
         poll_interval_seconds=int(data.get("poll_interval_seconds", 10)),
         repositories=[str(item) for item in repositories] if repositories else None,
+        log_path=Path(str(data["log_path"])) if data.get("log_path") else None,
     )
 
 
 def run_agent_loop(config: AgentConfig) -> None:
-    print(f"로컬 agent 시작: {config.control_plane_url}")
+    log_message(config, f"로컬 agent 시작: {config.control_plane_url}")
     while True:
         task = claim_task(config)
         if not task:
@@ -109,10 +113,10 @@ def run_agent_loop(config: AgentConfig) -> None:
 def claim_task(config: AgentConfig) -> ClaimedTask | None:
     query = {
         "agent_id": os.environ.get("COMPUTERNAME") or "local-agent",
+        "agent_token": config.agent_token,
     }
     if config.repositories:
         query["repositories"] = ",".join(config.repositories)
-    query["agent_token"] = config.agent_token
     url = f"{config.control_plane_url}/api/tasks/claim?{urllib.parse.urlencode(query)}"
     request = urllib.request.Request(
         url,
@@ -145,34 +149,36 @@ def run_claimed_task(config: AgentConfig, task: ClaimedTask) -> None:
     summary = "completed"
     detail = ""
     try:
-        workspace = prepare_repository_workspace(config.workspace_root, task)
-        execute_task_in_workspace(workspace, task)
+        log_message(config, f"작업 수신: {task.repository} / {task.event_name}")
+        workspace = prepare_repository_workspace(config, task)
+        execute_task_in_workspace(config, workspace, task)
     except Exception:
         summary = "failed"
         detail = traceback.format_exc()
-        print(detail)
+        log_message(config, detail.rstrip())
         report_task_completion(config, task.task_id, "failed", summary, detail)
         raise
     else:
+        log_message(config, f"작업 완료: {task.repository} / {task.event_name}")
         report_task_completion(config, task.task_id, "completed", summary, detail)
 
 
-def prepare_repository_workspace(workspace_root: Path, task: ClaimedTask) -> Path:
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    target = workspace_root / task.repository.replace("/", "__")
+def prepare_repository_workspace(config: AgentConfig, task: ClaimedTask) -> Path:
+    config.workspace_root.mkdir(parents=True, exist_ok=True)
+    target = config.workspace_root / task.repository.replace("/", "__")
     clone_url = f"https://x-access-token:{task.github_token}@github.com/{task.repository}.git"
 
     if not target.exists():
-        run_command(["git", "clone", "--depth", "1", clone_url, str(target)])
+        run_command(["git", "clone", "--depth", "1", clone_url, str(target)], config)
 
-    run_command(["git", "-C", str(target), "config", "core.autocrlf", "false"])
-    run_command(["git", "-C", str(target), "fetch", clone_url, task.default_branch])
-    run_command(["git", "-C", str(target), "checkout", "-B", task.default_branch, "FETCH_HEAD"])
-    run_command(["git", "-C", str(target), "reset", "--hard", "FETCH_HEAD"])
+    run_command(["git", "-C", str(target), "config", "core.autocrlf", "false"], config)
+    run_command(["git", "-C", str(target), "fetch", clone_url, task.default_branch], config)
+    run_command(["git", "-C", str(target), "checkout", "-B", task.default_branch, "FETCH_HEAD"], config)
+    run_command(["git", "-C", str(target), "reset", "--hard", "FETCH_HEAD"], config)
     return target
 
 
-def execute_task_in_workspace(workspace: Path, task: ClaimedTask) -> None:
+def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: ClaimedTask) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         event_path = Path(temp_dir) / "github-event.json"
         event_path.write_text(json.dumps(task.payload, ensure_ascii=False), encoding="utf-8")
@@ -185,6 +191,7 @@ def execute_task_in_workspace(workspace: Path, task: ClaimedTask) -> None:
             "BOT_GITHUB_TOKEN": task.github_token,
             "BOT_RESET_WORKTREE": "1",
         }
+        log_message(config, f"작업 실행: {workspace}")
         with temporary_env(env_updates), change_directory(workspace):
             bot_main.main()
 
@@ -218,7 +225,7 @@ def report_task_completion(
         return
 
 
-def run_command(command: list[str]) -> None:
+def run_command(command: list[str], config: AgentConfig | None = None) -> None:
     result = subprocess.run(
         command,
         text=True,
@@ -227,9 +234,31 @@ def run_command(command: list[str]) -> None:
         check=False,
     )
     if (result.stdout or "").strip():
-        print((result.stdout or "").rstrip())
+        log_message(config, (result.stdout or "").rstrip())
     if result.returncode != 0:
         raise RuntimeError(f"명령 실행 실패({result.returncode}): {' '.join(command)}")
+
+
+def try_resolve_log_path(config_path: Path) -> Path | None:
+    if not config_path.exists():
+        return None
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    log_path = data.get("log_path")
+    return Path(str(log_path)) if log_path else None
+
+
+def log_message(config: AgentConfig | None, message: str, *, log_path: Path | None = None) -> None:
+    print(message)
+    target_path = log_path or (config.log_path if config else None)
+    if not target_path:
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with target_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{timestamp}] {message}\n")
 
 
 @contextmanager

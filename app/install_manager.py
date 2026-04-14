@@ -84,7 +84,10 @@ class AgentBootstrapOptions:
     repositories: list[str]
     workspace_root: Path
     config_path: Path = DEFAULT_AGENT_CONFIG_PATH
+    log_path: Path = Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log"
     poll_interval_seconds: int = 10
+    install_task: bool = True
+    task_name: str = "issue-to-pr-bot-agent"
     force: bool = False
     dry_run: bool = False
 
@@ -94,6 +97,7 @@ class AgentBootstrapResult:
     config_path: Path
     operations: list[FileOperation]
     next_steps: list[str]
+    task_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,7 +210,10 @@ def build_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument("--repository", action="append", dest="repositories", default=[], help="agent가 처리할 GitHub 저장소입니다. 여러 번 지정할 수 있습니다.")
     agent_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"), help="agent가 작업용 저장소를 내려받을 루트 경로입니다.")
     agent_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH), help="agent 설정 파일을 저장할 경로입니다.")
+    agent_parser.add_argument("--log-path", default=str(Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log"), help="agent 로그 파일 경로입니다.")
     agent_parser.add_argument("--poll-interval-seconds", type=int, default=10, help="제어면을 다시 조회할 주기(초)입니다.")
+    agent_parser.add_argument("--skip-task", action="store_true", help="Windows 작업 스케줄러 등록을 건너뜁니다.")
+    agent_parser.add_argument("--task-name", default="issue-to-pr-bot-agent", help="작업 스케줄러에 등록할 작업 이름입니다.")
     agent_parser.add_argument("--force", action="store_true")
     agent_parser.add_argument("--dry-run", action="store_true")
 
@@ -218,7 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_all_parser.add_argument("--repository", action="append", dest="repositories", default=[], help="agent가 처리할 GitHub 저장소입니다. 여러 번 지정할 수 있습니다.")
     bootstrap_all_parser.add_argument("--workspace-root", default=str(DEFAULT_SUPPORT_ROOT / "agent-workspaces"), help="agent가 작업용 저장소를 내려받을 루트 경로입니다.")
     bootstrap_all_parser.add_argument("--config-path", default=str(DEFAULT_AGENT_CONFIG_PATH), help="agent 설정 파일을 저장할 경로입니다.")
+    bootstrap_all_parser.add_argument("--log-path", default=str(Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log"), help="agent 로그 파일 경로입니다.")
     bootstrap_all_parser.add_argument("--poll-interval-seconds", type=int, default=10, help="제어면을 다시 조회할 주기(초)입니다.")
+    bootstrap_all_parser.add_argument("--skip-task", action="store_true", help="Windows 작업 스케줄러 등록을 건너뜁니다.")
+    bootstrap_all_parser.add_argument("--task-name", default="issue-to-pr-bot-agent", help="작업 스케줄러에 등록할 작업 이름입니다.")
     bootstrap_all_parser.add_argument("--target-repo", required=True, help="초기화할 대상 저장소 루트 경로입니다.")
     bootstrap_all_parser.add_argument("--skip-config", action="store_true")
     bootstrap_all_parser.add_argument("--skip-agents", action="store_true")
@@ -303,7 +313,10 @@ def build_agent_bootstrap_options(args: argparse.Namespace) -> AgentBootstrapOpt
         repositories=list(args.repositories),
         workspace_root=Path(args.workspace_root).resolve(),
         config_path=Path(args.config_path).resolve(),
+        log_path=Path(getattr(args, "log_path", Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log")).resolve(),
         poll_interval_seconds=args.poll_interval_seconds,
+        install_task=not getattr(args, "skip_task", False),
+        task_name=getattr(args, "task_name", "issue-to-pr-bot-agent"),
         force=args.force,
         dry_run=args.dry_run,
     )
@@ -317,7 +330,10 @@ def build_bootstrap_all_options(args: argparse.Namespace) -> BootstrapAllOptions
         repositories=list(args.repositories),
         workspace_root=Path(args.workspace_root).resolve(),
         config_path=Path(args.config_path).resolve(),
+        log_path=Path(getattr(args, "log_path", Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log")).resolve(),
         poll_interval_seconds=args.poll_interval_seconds,
+        install_task=not getattr(args, "skip_task", False),
+        task_name=getattr(args, "task_name", "issue-to-pr-bot-agent"),
         force=args.force,
         dry_run=args.dry_run,
     )
@@ -494,6 +510,7 @@ def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstra
     if not options.dry_run:
         options.workspace_root.mkdir(parents=True, exist_ok=True)
         options.config_path.parent.mkdir(parents=True, exist_ok=True)
+        options.log_path.parent.mkdir(parents=True, exist_ok=True)
 
     config_body = json.dumps(
         {
@@ -501,6 +518,7 @@ def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstra
             "agent_token": options.agent_token,
             "repositories": options.repositories,
             "workspace_root": str(options.workspace_root),
+            "log_path": str(options.log_path),
             "poll_interval_seconds": options.poll_interval_seconds,
         },
         ensure_ascii=False,
@@ -512,14 +530,22 @@ def bootstrap_agent_environment(options: AgentBootstrapOptions) -> AgentBootstra
         force=options.force,
         dry_run=options.dry_run,
     )
+    task_status = register_agent_scheduled_task(options)
+    next_steps = [
+        "Codex 로그인 상태 확인",
+        f"로그 확인: `{options.log_path}`",
+    ]
+    if options.install_task:
+        next_steps.append(f"Windows 작업 스케줄러 작업: `{options.task_name}` ({task_status})")
+        next_steps.append(f"즉시 실행: `schtasks /Run /TN \"{options.task_name}\"`")
+    else:
+        next_steps.append(f"`issue-to-pr-bot-agent serve --config {options.config_path}` 로 agent 시작")
+
     return AgentBootstrapResult(
         config_path=options.config_path,
         operations=[FileOperation(path=options.config_path, action=action)],
-        next_steps=[
-            "Codex 로그인 상태 확인",
-            f"`issue-to-pr-bot-agent serve --config {options.config_path}` 로 agent 시작",
-            "필요하면 Windows 작업 스케줄러나 서비스로 agent를 상시 실행",
-        ],
+        next_steps=next_steps,
+        task_name=options.task_name if options.install_task else None,
     )
 
 
@@ -531,7 +557,10 @@ def bootstrap_all_environment(options: BootstrapAllOptions) -> tuple[ControlPlan
         repositories=options.agent.repositories,
         workspace_root=options.agent.workspace_root,
         config_path=options.agent.config_path,
+        log_path=options.agent.log_path,
         poll_interval_seconds=options.agent.poll_interval_seconds,
+        install_task=options.agent.install_task,
+        task_name=options.agent.task_name,
         force=options.agent.force,
         dry_run=options.agent.dry_run,
     )
@@ -685,6 +714,44 @@ def write_managed_file(path: Path, content: str, *, force: bool, dry_run: bool) 
     return "overwritten" if exists else "created"
 
 
+def build_agent_launch_command(config_path: Path) -> str:
+    agent_executable = shutil.which("issue-to-pr-bot-agent")
+    if agent_executable:
+        return f'"{agent_executable}" serve --config "{config_path}"'
+    return f'"{sys.executable}" -m app.agent_runner serve --config "{config_path}"'
+
+
+def register_agent_scheduled_task(options: AgentBootstrapOptions) -> str:
+    if not options.install_task:
+        return "skipped"
+    if os.name != "nt":
+        return "unsupported"
+    if options.dry_run:
+        return "would_create"
+
+    command = build_agent_launch_command(options.config_path)
+    try:
+        run_checked_command(
+            [
+                "schtasks",
+                "/Create",
+                "/TN",
+                options.task_name,
+                "/SC",
+                "ONLOGON",
+                "/RL",
+                "LIMITED",
+                "/TR",
+                command,
+                "/F",
+            ],
+            cwd=options.config_path.parent,
+        )
+    except RuntimeError as exc:
+        return f"failed: {exc}"
+    return "created"
+
+
 def resolve_codex_home() -> Path:
     return Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
 
@@ -834,6 +901,17 @@ def relative_to_target(path: Path, target: Path) -> str:
     return path.relative_to(target).as_posix()
 
 
+def try_extract_log_path(config_path: Path) -> str | None:
+    if not config_path.exists():
+        return None
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    log_path = payload.get("log_path")
+    return str(log_path) if log_path else None
+
+
 def format_install_result(result: InstallManagerResult) -> str:
     lines = [
         "## 설치 결과",
@@ -858,9 +936,16 @@ def format_agent_bootstrap_result(result: AgentBootstrapResult) -> str:
         "## 로컬 agent 준비 결과",
         "",
         f"- 설정 파일: `{result.config_path}`",
+        f"- 로그 파일: `{try_extract_log_path(result.config_path) or '설정 파일 생성 후 확인'}`",
+    ]
+    if result.task_name:
+        lines.append(f"- 작업 스케줄러: `{result.task_name}`")
+    lines.extend(
+        [
         "",
         "### 파일 작업",
-    ]
+        ]
+    )
     if not result.operations:
         lines.append("- 없음")
     else:

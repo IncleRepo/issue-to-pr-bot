@@ -275,14 +275,32 @@ issue-to-pr-bot-manager bootstrap-agent `
 - agent 설정 파일 생성
 - 작업용 workspace 루트 준비
 - 어떤 저장소를 이 PC가 처리할지 기록
+- 기본 로그 파일 경로 생성
+- Windows 작업 스케줄러에 agent 자동 시작 등록
 
-설정 파일이 만들어지면 agent를 실행합니다.
+기본 로그 파일 경로:
+
+```text
+%USERPROFILE%\.issue-to-pr-bot-agent\logs\agent.log
+```
+
+기본 작업 스케줄러 이름:
+
+```text
+issue-to-pr-bot-agent
+```
+
+즉시 한번 실행해보고 싶으면:
+
+```powershell
+schtasks /Run /TN "issue-to-pr-bot-agent"
+```
+
+작업 스케줄러 등록을 원하지 않으면 `--skip-task`를 붙이면 됩니다. 그 경우에는 직접 아래 명령으로 agent를 실행하면 됩니다.
 
 ```powershell
 issue-to-pr-bot-agent serve
 ```
-
-이 프로세스는 계속 켜져 있어야 합니다. Windows 작업 스케줄러나 서비스로 상시 실행하면 더 편합니다.
 
 ## 5. 대상 저장소 최소 파일 준비
 
@@ -425,7 +443,25 @@ issue-to-pr-bot-manager bootstrap-agent `
   --workspace-root C:\issue-to-pr-bot-workspaces
 ```
 
-로컬 agent 실행:
+기본 로그 파일:
+
+```text
+%USERPROFILE%\.issue-to-pr-bot-agent\logs\agent.log
+```
+
+기본 작업 스케줄러 이름:
+
+```text
+issue-to-pr-bot-agent
+```
+
+즉시 실행:
+
+```powershell
+schtasks /Run /TN "issue-to-pr-bot-agent"
+```
+
+작업 스케줄러를 쓰지 않으려면 직접 실행:
 
 ```powershell
 issue-to-pr-bot-agent serve
