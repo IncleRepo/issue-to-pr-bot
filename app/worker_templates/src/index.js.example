@@ -179,8 +179,11 @@ async function verifyWebhookSignature(request, rawBody, env) {
 
 function isAuthorizedAgent(request, env) {
   const auth = request.headers.get("Authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
-  return !!token && token === env.CONTROL_PLANE_AGENT_TOKEN;
+  const headerToken = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+  const queryToken = new URL(request.url).searchParams.get("agent_token") || "";
+  const token = (headerToken || queryToken).trim();
+  const expected = String(env.CONTROL_PLANE_AGENT_TOKEN || "").trim();
+  return !!token && !!expected && token === expected;
 }
 
 async function mintInstallationToken(installationId, env) {

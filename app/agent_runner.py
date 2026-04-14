@@ -112,12 +112,14 @@ def claim_task(config: AgentConfig) -> ClaimedTask | None:
     }
     if config.repositories:
         query["repositories"] = ",".join(config.repositories)
+    query["agent_token"] = config.agent_token
     url = f"{config.control_plane_url}/api/tasks/claim?{urllib.parse.urlencode(query)}"
     request = urllib.request.Request(
         url,
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {config.agent_token}",
+            "User-Agent": "Mozilla/5.0 issue-to-pr-bot-agent",
         },
         method="GET",
     )
@@ -208,6 +210,7 @@ def report_task_completion(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config.agent_token}",
+            "User-Agent": "Mozilla/5.0 issue-to-pr-bot-agent",
         },
         method="POST",
     )
