@@ -14,12 +14,14 @@ from app.install_manager import (
     GithubConfigurationOptions,
     HostBootstrapOptions,
     InstallManagerOptions,
+    TargetRepositoryOptions,
     auto_install_command_if_missing,
     bootstrap_agent_environment,
     bootstrap_repository_environment,
     bootstrap_host_environment,
     configure_repository_settings,
     init_control_plane_environment,
+    init_target_repository,
     install_repository_environment,
     main,
     probe_command,
@@ -179,6 +181,16 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(config_data["workspace_root"], str(workspace_root))
             self.assertEqual(result.operations[0].action, "created")
 
+    def test_init_target_repository_writes_minimal_non_actions_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir)
+
+            result = init_target_repository(TargetRepositoryOptions(target=target))
+
+            self.assertTrue((target / ".issue-to-pr-bot.yml").exists())
+            self.assertTrue((target / "AGENTS.md").exists())
+            self.assertEqual([operation.action for operation in result.operations], ["created", "created"])
+
     def test_main_supports_bootstrap_agent_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -202,6 +214,22 @@ class InstallManagerTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertFalse(config_path.exists())
+
+    def test_main_supports_init_target_repo_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir)
+            exit_code = main(
+                [
+                    "init-target-repo",
+                    "--target",
+                    str(target),
+                    "--dry-run",
+                ]
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertFalse((target / ".issue-to-pr-bot.yml").exists())
+            self.assertFalse((target / "AGENTS.md").exists())
 
     @patch("app.install_manager.shutil.which")
     @patch("app.install_manager.run_command")

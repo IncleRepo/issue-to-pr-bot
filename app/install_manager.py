@@ -20,6 +20,7 @@ DEFAULT_ENGINE_REF = "main"
 DEFAULT_RUNNER_LABELS = ["self-hosted", "Windows"]
 DEFAULT_RUNNER_WORK_DIRECTORY = "_work"
 CONFIG_TEMPLATE_NAME = ".issue-to-pr-bot.yml.example"
+AGENTS_TEMPLATE_NAME = "AGENTS.md.example"
 WORKFLOW_SPECS = (
     ("issue-comment.yml.example", ".github/workflows/issue-comment.yml"),
     ("pull-request-review.yml.example", ".github/workflows/pull-request-review.yml"),
@@ -78,6 +79,15 @@ class InstallManagerResult:
     target: Path
     operations: list[FileOperation]
     next_steps: list[str]
+
+
+@dataclass(frozen=True)
+class TargetRepositoryOptions:
+    target: Path
+    write_config: bool = True
+    write_agents: bool = True
+    force: bool = False
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,6 +220,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = install_repository_environment(build_install_options(args))
             print(format_install_result(result))
             return 0
+        if args.command == "init-target-repo":
+            result = init_target_repository(build_target_repository_options(args))
+            print(format_install_result(result))
+            return 0
         if args.command == "update":
             result = install_repository_environment(build_install_options(args, force_default=True))
             print(format_install_result(result))
@@ -259,13 +273,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser(
         "init",
-        help="Write thin reusable-workflow callers into a target repository.",
+        help="Write thin reusable-workflow callers into a target repository. (legacy Actions path)",
     )
     add_install_arguments(init_parser)
 
+    init_target_parser = subparsers.add_parser(
+        "init-target-repo",
+        help="Write minimal non-Actions bot files into a target repository for control-plane/agent mode.",
+    )
+    add_target_repository_arguments(init_target_parser)
+
     update_parser = subparsers.add_parser(
         "update",
-        help="Refresh the managed workflow files in a target repository.",
+        help="Refresh the managed workflow files in a target repository. (legacy Actions path)",
     )
     add_install_arguments(update_parser)
 
@@ -283,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap_parser = subparsers.add_parser(
         "bootstrap",
-        help="Install workflows, optionally configure GitHub settings, and run readiness checks.",
+        help="Install workflows, optionally configure GitHub settings, and run readiness checks. (legacy Actions path)",
     )
     add_install_arguments(bootstrap_parser)
     add_doctor_arguments(bootstrap_parser)
@@ -360,6 +380,30 @@ def add_install_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_target_repository_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--target", required=True, help="Path to the target repository root.")
+    parser.add_argument(
+        "--skip-config",
+        action="store_true",
+        help="Do not write `.issue-to-pr-bot.yml`.",
+    )
+    parser.add_argument(
+        "--skip-agents",
+        action="store_true",
+        help="Do not write `AGENTS.md`.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing managed files.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would change without writing files.",
+    )
+
+
 def add_doctor_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--repo",
@@ -425,6 +469,16 @@ def build_install_options(args: argparse.Namespace, *, force_default: bool = Fal
         include_review_workflows=not args.skip_review_workflows,
         write_config=args.write_config,
         force=args.force or force_default,
+        dry_run=args.dry_run,
+    )
+
+
+def build_target_repository_options(args: argparse.Namespace) -> TargetRepositoryOptions:
+    return TargetRepositoryOptions(
+        target=Path(args.target).resolve(),
+        write_config=not args.skip_config,
+        write_agents=not args.skip_agents,
+        force=args.force,
         dry_run=args.dry_run,
     )
 
@@ -554,6 +608,42 @@ def install_repository_environment(options: InstallManagerOptions) -> InstallMan
         target=options.target,
         operations=operations,
         next_steps=build_install_next_steps(options, operations),
+    )
+
+
+def init_target_repository(options: TargetRepositoryOptions) -> InstallManagerResult:
+    ensure_target_exists(options.target)
+
+    operations: list[FileOperation] = []
+    if options.write_config:
+        config_target_path = options.target / ".issue-to-pr-bot.yml"
+        action = write_managed_file(
+            config_target_path,
+            load_template_text(CONFIG_TEMPLATE_NAME),
+            force=options.force,
+            dry_run=options.dry_run,
+        )
+        operations.append(FileOperation(path=config_target_path, action=action))
+
+    if options.write_agents:
+        agents_target_path = options.target / "AGENTS.md"
+        action = write_managed_file(
+            agents_target_path,
+            load_template_text(AGENTS_TEMPLATE_NAME),
+            force=options.force,
+            dry_run=options.dry_run,
+        )
+        operations.append(FileOperation(path=agents_target_path, action=action))
+
+    return InstallManagerResult(
+        target=options.target,
+        operations=operations,
+        next_steps=[
+            "GitHub App이 대상 저장소에 설치되어 있는지 확인하세요.",
+            "Cloudflare Worker webhook URL이 GitHub App에 연결되어 있는지 확인하세요.",
+            "로컬 agent가 이 저장소를 처리하도록 `bootstrap-agent`에 같은 저장소를 넣으세요.",
+            "필요한 규칙은 `AGENTS.md`와 `.issue-to-pr-bot.yml`에만 최소한으로 적으세요.",
+        ],
     )
 
 
