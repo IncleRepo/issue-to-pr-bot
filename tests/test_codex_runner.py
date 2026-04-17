@@ -30,9 +30,9 @@ class CodexRunnerTest(unittest.TestCase):
         with patch("app.codex_provider.resolve_codex_executable", return_value="codex"):
             command = build_codex_command(workspace)
 
-        self.assertEqual(command[:4], ["codex", "-C", str(workspace), "exec"])
+        self.assertEqual(command[:6], ["codex", "-a", "never", "-C", str(workspace), "exec"])
         self.assertEqual(command[command.index("--model") + 1], LATEST_CODEX_MODEL)
-        self.assertIn("--full-auto", command)
+        self.assertNotIn("--full-auto", command)
         self.assertEqual(command[-1], "-")
 
     def test_build_codex_resume_command_uses_last_session(self) -> None:
@@ -40,9 +40,12 @@ class CodexRunnerTest(unittest.TestCase):
         with patch("app.codex_provider.resolve_codex_executable", return_value="codex"):
             command = build_codex_resume_command(workspace)
 
-        self.assertEqual(command[:6], ["codex", "-C", str(workspace), "exec", "resume", "--last"])
+        self.assertEqual(
+            command[:8],
+            ["codex", "-a", "never", "-C", str(workspace), "exec", "resume", "--last"],
+        )
         self.assertEqual(command[command.index("--model") + 1], LATEST_CODEX_MODEL)
-        self.assertIn("--full-auto", command)
+        self.assertNotIn("--full-auto", command)
         self.assertEqual(command[-1], "-")
 
     def test_build_codex_command_can_write_last_message(self) -> None:
