@@ -42,15 +42,29 @@ def create_codex_pr(
             run_verification(config, workspace, commands=verification_commands)
         else:
             print("Codex run produced no workspace changes, so verification is skipped.")
-
-    return commit_push_and_open_pr(
-        request=request,
-        workspace=workspace,
-        config=config,
-        branch_name=target.branch_name,
-        base_branch=target.base_branch,
-        verification_commands=verification_commands,
-    )
+    try:
+        return commit_push_and_open_pr(
+            request=request,
+            workspace=workspace,
+            config=config,
+            branch_name=target.branch_name,
+            base_branch=target.base_branch,
+            verification_commands=verification_commands,
+        )
+    except RuntimeError as error:
+        if not is_missing_local_commit_error(error):
+            raise
+        print("Codex가 로컬 변경 후 커밋 없이 종료해, 커밋만 보강하도록 한 번 더 요청합니다.")
+        follow_up_prompt = build_missing_commit_follow_up_prompt(primary_prompt)
+        run_codex(request, workspace, config, command, runtime_options, follow_up_prompt)
+        return commit_push_and_open_pr(
+            request=request,
+            workspace=workspace,
+            config=config,
+            branch_name=target.branch_name,
+            base_branch=target.base_branch,
+            verification_commands=verification_commands,
+        )
 
 
 def run_codex(
@@ -81,6 +95,35 @@ def run_codex(
         )
     )
     return CodexRunResult(output=result.output)
+
+
+def is_missing_local_commit_error(error: Exception) -> bool:
+    return "Codex finished with local changes but no local commit." in str(error)
+
+
+def build_missing_commit_follow_up_prompt(prepared_prompt: PreparedPrompt) -> PreparedPrompt:
+    follow_up = "\n".join(
+        [
+            prepared_prompt.prompt,
+            "",
+            "Follow-up wrapper instruction:",
+            "- You already changed files in the workspace, but you exited without creating the required local commit.",
+            "- Do not restart the task from scratch.",
+            "- Inspect the current workspace state, create or amend the publishable local commit now, and then exit.",
+            "- Do not push, open a PR, merge, or perform any extra GitHub workflow steps yourself.",
+            "- Only make additional code changes if they are strictly necessary to complete that local commit cleanly.",
+        ]
+    )
+    return PreparedPrompt(
+        prompt=follow_up,
+        attachment_info=prepared_prompt.attachment_info,
+        available_secret_keys=prepared_prompt.available_secret_keys,
+        repository_context=prepared_prompt.repository_context,
+        project_summary=prepared_prompt.project_summary,
+        code_context=prepared_prompt.code_context,
+        attachment_context=prepared_prompt.attachment_context,
+        metrics=prepared_prompt.metrics,
+    )
 
 
 def should_rerun_codex_after_sync(sync_result: BaseSyncResult) -> bool:
