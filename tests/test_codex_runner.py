@@ -30,7 +30,10 @@ class CodexRunnerTest(unittest.TestCase):
         with patch("app.codex_provider.resolve_codex_executable", return_value="codex"):
             command = build_codex_command(workspace)
 
-        self.assertEqual(command[:6], ["codex", "-a", "never", "-C", str(workspace), "exec"])
+        self.assertEqual(
+            command[:8],
+            ["codex", "-a", "never", "-s", "danger-full-access", "-C", str(workspace), "exec"],
+        )
         self.assertEqual(command[command.index("--model") + 1], LATEST_CODEX_MODEL)
         self.assertNotIn("--full-auto", command)
         self.assertEqual(command[-1], "-")
@@ -41,8 +44,19 @@ class CodexRunnerTest(unittest.TestCase):
             command = build_codex_resume_command(workspace)
 
         self.assertEqual(
-            command[:8],
-            ["codex", "-a", "never", "-C", str(workspace), "exec", "resume", "--last"],
+            command[:10],
+            [
+                "codex",
+                "-a",
+                "never",
+                "-s",
+                "danger-full-access",
+                "-C",
+                str(workspace),
+                "exec",
+                "resume",
+                "--last",
+            ],
         )
         self.assertEqual(command[command.index("--model") + 1], LATEST_CODEX_MODEL)
         self.assertNotIn("--full-auto", command)

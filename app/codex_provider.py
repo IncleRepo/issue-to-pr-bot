@@ -294,7 +294,18 @@ def build_codex_command(
     effort: str | None = None,
     output_last_message: Path | None = None,
 ) -> list[str]:
-    command = [resolve_codex_executable(), "-a", "never", "-C", str(workspace), "exec", "--model", LATEST_CODEX_MODEL]
+    command = [
+        resolve_codex_executable(),
+        "-a",
+        "never",
+        "-s",
+        "danger-full-access",
+        "-C",
+        str(workspace),
+        "exec",
+        "--model",
+        LATEST_CODEX_MODEL,
+    ]
     if effort:
         command.extend(["-c", f'reasoning_effort="{effort}"'])
     if output_last_message:
@@ -312,6 +323,8 @@ def build_codex_resume_command(
         resolve_codex_executable(),
         "-a",
         "never",
+        "-s",
+        "danger-full-access",
         "-C",
         str(workspace),
         "exec",
