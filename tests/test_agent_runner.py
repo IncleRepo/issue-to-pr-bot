@@ -24,6 +24,7 @@ from app.agent_runner import (
     prepare_repository_workspace,
     read_running_pid,
     resolve_pid_path,
+    resolve_requested_log_path,
     resolve_task_lock_key,
     run_task_subprocess,
     resolve_workspace_path,
@@ -454,20 +455,15 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertTrue(keep_running)
         mock_logs.assert_called_once_with(Path(r"C:\agent\agent-config.json"), task_id=None, latest=True, follow=True)
 
-    @patch("app.agent.service.start_log_stream_stop_listener")
-    def test_stream_task_logs_follow_stops_on_stop_event(self, mock_listener) -> None:
+    @patch("app.agent.service.should_stop_log_stream")
+    def test_stream_task_logs_follow_stops_on_q_request(self, mock_stop) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "agent-config.json"
             tasks_root = config_path.parent / "tasks"
             tasks_root.mkdir(parents=True)
             log_path = tasks_root / "task-1.log"
             log_path.write_text("line-1\n", encoding="utf-8")
-
-            def trigger_stop(stop_event):
-                stop_event.set()
-                return None
-
-            mock_listener.side_effect = trigger_stop
+            mock_stop.side_effect = [False, True]
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 result = stream_task_logs(config_path, task_id="task-1", latest=False, follow=True)
@@ -504,6 +500,66 @@ class AgentRunnerTest(unittest.TestCase):
                 run_console_update(config_path)
 
         self.assertIn("이미 최신 버전입니다", stdout.getvalue())
+
+    def test_resolve_requested_log_path_accepts_task_id_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            state_path = config_path.with_suffix(".state.json")
+            log_path = Path(temp_dir) / "tasks" / "f9f7995b-214a-4cfc-b5c1-871f4369fb8a.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("task log", encoding="utf-8")
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "running": [
+                            {
+                                "task_id": "f9f7995b-214a-4cfc-b5c1-871f4369fb8a",
+                                "log_path": str(log_path),
+                                "started_at": "2026-04-17T15:51:27",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_requested_log_path(config_path, task_id="f9f7995b-214", latest=False)
+
+        self.assertEqual(resolved, log_path)
+
+    def test_resolve_requested_log_path_prefers_running_latest_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            state_path = config_path.with_suffix(".state.json")
+            tasks_root = Path(temp_dir) / "tasks"
+            tasks_root.mkdir(parents=True, exist_ok=True)
+            older_log = tasks_root / "older.log"
+            newer_log = tasks_root / "newer.log"
+            older_log.write_text("older", encoding="utf-8")
+            newer_log.write_text("newer", encoding="utf-8")
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "running": [
+                            {
+                                "task_id": "task-old",
+                                "log_path": str(older_log),
+                                "started_at": "2026-04-17T15:00:00",
+                            },
+                            {
+                                "task_id": "task-new",
+                                "log_path": str(newer_log),
+                                "started_at": "2026-04-17T16:00:00",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_requested_log_path(config_path, task_id=None, latest=True)
+
+        self.assertEqual(resolved, newer_log)
 
 
 if __name__ == "__main__":

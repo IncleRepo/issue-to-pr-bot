@@ -924,6 +924,7 @@ def run_task_process(config: AgentConfig, config_path: Path, task: ClaimedTask, 
     task_file.parent.mkdir(parents=True, exist_ok=True)
     task_file.write_text(serialize_task(task), encoding="utf-8")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch(exist_ok=True)
     if executor is None:
         executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(run_task_subprocess, config_path, task_file, log_path, pid_file)
@@ -1073,14 +1074,11 @@ def stream_task_logs(config_path: Path, *, task_id: str | None, latest: bool, fo
     if not follow:
         print(log_path.read_text(encoding="utf-8", errors="replace"))
         return 0
-
-    stop_stream_event = threading.Event()
-    stop_listener = start_log_stream_stop_listener(stop_stream_event)
     print("로그 스트리밍 중입니다. 종료하려면 `q`를 누르세요.")
     try:
         with log_path.open("r", encoding="utf-8", errors="replace") as handle:
             while True:
-                if stop_stream_event.is_set():
+                if should_stop_log_stream():
                     print()
                     print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
                     return 0
@@ -1093,69 +1091,91 @@ def stream_task_logs(config_path: Path, *, task_id: str | None, latest: bool, fo
         print()
         print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
         return 0
-    finally:
-        stop_stream_event.set()
-        if stop_listener is not None:
-            stop_listener.join(timeout=1)
 
 
-def start_log_stream_stop_listener(stop_event: threading.Event) -> threading.Thread | None:
-    if not sys.stdin or not sys.stdin.isatty():
-        return None
-
-    listener = threading.Thread(
-        target=watch_log_stream_stop_key,
-        args=(stop_event,),
-        name="issue-to-pr-bot-log-stop-listener",
-        daemon=True,
-    )
-    listener.start()
-    return listener
-
-
-def watch_log_stream_stop_key(stop_event: threading.Event) -> None:
+def should_stop_log_stream() -> bool:
     if os.name == "nt":
-        watch_log_stream_stop_key_windows(stop_event)
-        return
-    watch_log_stream_stop_key_posix(stop_event)
+        return should_stop_log_stream_windows()
+    return should_stop_log_stream_posix()
 
 
-def watch_log_stream_stop_key_windows(stop_event: threading.Event) -> None:
-    while not stop_event.is_set():
-        if not msvcrt.kbhit():
-            time.sleep(0.1)
-            continue
-        key = msvcrt.getwch()
-        if key.lower() == "q":
-            stop_event.set()
+def should_stop_log_stream_windows() -> bool:
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    if not msvcrt.kbhit():
+        return False
+    key = msvcrt.getwch()
+    return key.lower() == "q"
 
 
-def watch_log_stream_stop_key_posix(stop_event: threading.Event) -> None:
+def should_stop_log_stream_posix() -> bool:
     if sys.stdin is None or not sys.stdin.isatty():
-        return
+        return False
 
     file_descriptor = sys.stdin.fileno()
     original_settings = termios.tcgetattr(file_descriptor)
     try:
         tty.setcbreak(file_descriptor)
-        while not stop_event.is_set():
-            readable, _, _ = select.select([file_descriptor], [], [], 0.1)
-            if not readable:
-                continue
-            key = os.read(file_descriptor, 1).decode("utf-8", errors="ignore")
-            if key.lower() == "q":
-                stop_event.set()
+        readable, _, _ = select.select([file_descriptor], [], [], 0)
+        if not readable:
+            return False
+        key = os.read(file_descriptor, 1).decode("utf-8", errors="ignore")
+        return key.lower() == "q"
     finally:
         termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_settings)
 
 
 def resolve_requested_log_path(config_path: Path, *, task_id: str | None, latest: bool) -> Path | None:
     if task_id:
-        return resolve_task_log_path(config_path, task_id)
+        return resolve_requested_task_log_path(config_path, task_id)
     if latest:
-        candidates = sorted(resolve_tasks_root(config_path).glob("*.log"), key=lambda item: item.stat().st_mtime, reverse=True)
-        return candidates[0] if candidates else None
+        return resolve_latest_log_path(config_path)
     return None
+
+
+def resolve_requested_task_log_path(config_path: Path, task_id: str) -> Path | None:
+    state_entries = get_running_entries(config_path)
+    exact_entry = next((item for item in state_entries if str(item.get("task_id") or "") == task_id), None)
+    if exact_entry is not None:
+        return Path(str(exact_entry.get("log_path")))
+
+    prefix_matches = [
+        item
+        for item in state_entries
+        if str(item.get("task_id") or "").startswith(task_id)
+    ]
+    if len(prefix_matches) == 1:
+        return Path(str(prefix_matches[0].get("log_path")))
+    if len(prefix_matches) > 1:
+        return None
+
+    exact_path = resolve_task_log_path(config_path, task_id)
+    if exact_path.exists():
+        return exact_path
+
+    candidates = sorted(resolve_tasks_root(config_path).glob(f"{task_id}*.log"))
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def resolve_latest_log_path(config_path: Path) -> Path | None:
+    state_entries = get_running_entries(config_path)
+    if state_entries:
+        latest_entry = max(
+            state_entries,
+            key=lambda item: str(item.get("started_at") or ""),
+        )
+        log_path = latest_entry.get("log_path")
+        if log_path:
+            return Path(str(log_path))
+
+    candidates = sorted(
+        resolve_tasks_root(config_path).glob("*.log"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
 
 
 def resolve_workspace_path(config: AgentConfig, task: ClaimedTask) -> Path:
