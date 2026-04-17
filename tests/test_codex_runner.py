@@ -77,7 +77,7 @@ class CodexRunnerTest(unittest.TestCase):
         self.assertIn("-c", command)
         self.assertIn('reasoning_effort="high"', command)
 
-    def test_resolve_codex_executable_prefers_windows_shims(self) -> None:
+    def test_resolve_codex_executable_prefers_user_installed_windows_cli(self) -> None:
         with patch("app.codex_provider.os.name", "nt"), patch(
             "app.codex_provider.shutil_module.which",
             side_effect=lambda name: {
@@ -89,7 +89,7 @@ class CodexRunnerTest(unittest.TestCase):
 
             self.assertEqual(
                 resolve_codex_executable(),
-                r"C:\\Users\\me\\.vscode\\extensions\\openai.chatgpt\\bin\\windows-x86_64\\codex.exe",
+                r"C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
             )
 
     def test_get_effort_validates_values(self) -> None:

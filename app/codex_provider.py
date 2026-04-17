@@ -344,7 +344,10 @@ def build_codex_resume_command(
 def resolve_codex_executable() -> str:
     if os.name != "nt":
         return "codex"
-    for candidate in ("codex.exe", "codex-command-runner.exe", "codex.cmd", "codex"):
+    # Prefer the user-installed Codex CLI shims on Windows. The VS Code bundled
+    # binaries can diverge in behavior and have repeatedly reintroduced sandbox
+    # helper flows that do not match the agent's runtime assumptions.
+    for candidate in ("codex.cmd", "codex", "codex.exe", "codex-command-runner.exe"):
         resolved = shutil_module.which(candidate)
         if resolved:
             return resolved
