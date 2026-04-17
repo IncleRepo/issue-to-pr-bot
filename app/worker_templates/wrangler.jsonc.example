@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "{{WORKER_NAME}}",
+  "main": "src/index.js",
+  "compatibility_date": "2026-04-14",
+  "vars": {
+    "BOT_MENTION": "{{BOT_MENTION}}",
+    "AGENT_REPOSITORIES": "{{AGENT_REPOSITORIES}}",
+    "AGENT_POLL_INTERVAL_SECONDS": {{AGENT_POLL_INTERVAL_SECONDS}},
+    "AGENT_MAX_CONCURRENCY": {{AGENT_MAX_CONCURRENCY}}
+  },
+  "kv_namespaces": []
+}

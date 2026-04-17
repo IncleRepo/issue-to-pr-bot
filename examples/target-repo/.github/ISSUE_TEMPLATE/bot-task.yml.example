@@ -1,0 +1,34 @@
+name: Bot task
+description: Request an issue-to-pr-bot implementation task.
+title: "[bot-task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe a focused task that the bot can implement in a pull request.
+  - type: textarea
+    id: request
+    attributes:
+      label: Request
+      description: What should change?
+      placeholder: Add a local setup section to README.md.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How should reviewers know the task is complete?
+      placeholder: |
+        - README.md includes Windows PowerShell commands.
+        - Existing content remains intact.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Link relevant docs, files, or constraints. Do not paste secrets.
+    validations:
+      required: false
+

@@ -1,0 +1,45 @@
+# Repository Agent Guide
+
+## Working Rules
+
+- Keep changes focused on the requested issue or review feedback.
+- Read `README.md` and `CONTRIBUTING.md` before changing code when they exist.
+- If required context is missing, stop instead of guessing.
+- Do not commit secrets, tokens, private keys, local caches, or generated files.
+
+## Verification
+
+Use lightweight checks first. Add stricter checks only when the repository actually needs them.
+
+```powershell
+python -m compileall -q app tests
+python -m unittest discover -s tests
+```
+
+## Protected Paths
+
+- `.github/workflows/**`
+- `.env`
+- `.env.*`
+- `*.pem`
+- `*.key`
+
+## Notes
+
+- Do not add `Required Secrets` unless the repository really needs them.
+- Do not add `Required Context` unless the bot must stop without those files.
+- Start simple and tighten the rules only after the repository workflow is stable.
+
+## Optional Metadata
+
+Use this only when the repository already has a stable convention for labels, assignees, reviewers, or milestones.
+
+```md
+Issue labels: `bug`
+PR labels: `automation`, `bot`
+Assignees: `@alice`
+Reviewers: `@bob`
+Team reviewers: `@my-org/backend`
+Milestone: `Sprint 1`
+```
+
