@@ -418,6 +418,17 @@ class BotTest(unittest.TestCase):
         self.assertTrue(options.sync_base)
         self.assertEqual(options.mode, "codex")
 
+    def test_resolve_runtime_options_infers_fresh_workspace_from_natural_language(self) -> None:
+        command = parse_bot_command(
+            "@incle-issue-to-pr-bot 기존에있는 워크스페이스 상관없이 다시 새로 구현부탁해",
+            BotConfig(),
+        )
+
+        assert command is not None
+        options = resolve_runtime_options(command, BotConfig())
+
+        self.assertTrue(options.fresh_workspace)
+
     def test_resolve_runtime_options_infers_default_effort_for_simple_docs_change(self) -> None:
         command = parse_bot_command(
             "@incle-issue-to-pr-bot README 臾멸뎄留??ㅻ벉?댁쨾",

@@ -35,6 +35,7 @@ from app.release_channel import install_standalone_binary, is_newer_version
 from app.runtime.comments import configure_output_encoding, post_interrupted_comment
 from app.versioning import APP_VERSION
 from app.workspace_state import cleanup_stale_workspaces, infer_scope_from_workspace, touch_workspace_metadata
+from app.workspace_state import invalidate_codex_session, resolve_workspace_codex_home_root
 
 DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-config.json"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -656,6 +657,7 @@ def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: Claime
         event_path = Path(temp_dir) / "github-event.json"
         event_path.write_text(json.dumps(task.payload, ensure_ascii=False), encoding="utf-8")
         request = build_issue_request(task.payload)
+        command = parse_bot_command(request.comment_body)
         output_root = get_workspace_output_artifact_root(workspace)
         env_updates = {
             "BOT_CREATE_PR": "1",
@@ -670,14 +672,26 @@ def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: Claime
         log_message(config, f"작업 실행: {workspace}", log_path=log_path)
         with temporary_env(env_updates), change_directory(workspace):
             try:
+                if command and command.options.get("fresh_workspace") == "true":
+                    reset_workspace_runtime_for_fresh_run(workspace, config, log_path=log_path)
                 ensure_task_output_root(request)
                 bot_main.main()
                 touch_workspace_metadata(workspace)
             except KeyboardInterrupt as error:
                 interrupt_active_codex_process()
-                command = parse_bot_command(request.comment_body)
                 post_interrupted_comment(request, command)
                 raise TaskInterrupted("사용자 요청으로 현재 작업을 중단했고 결과 댓글을 남겼습니다.") from error
+
+
+def reset_workspace_runtime_for_fresh_run(
+    workspace: Path,
+    config: AgentConfig,
+    *,
+    log_path: Path | None = None,
+) -> None:
+    log_message(config, "fresh 요청을 감지해 기존 Codex 세션과 런타임 상태를 정리합니다.", log_path=log_path)
+    invalidate_codex_session(workspace)
+    shutil.rmtree(resolve_workspace_codex_home_root(workspace), ignore_errors=True)
 
 
 def report_task_completion(config: AgentConfig, task_id: str, status: str, summary: str, detail: str) -> None:

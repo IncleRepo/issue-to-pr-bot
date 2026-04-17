@@ -23,7 +23,7 @@ from app.domain.models import MetadataPlan
 from app.metadata_rules import infer_issue_metadata, infer_pull_request_metadata
 from app.output_artifacts import get_pr_body_draft_path, get_pr_summary_draft_path
 from app.output_artifacts import get_pr_title_draft_path, is_non_publishable_workspace_path
-from app.workspace_state import mark_workspace_linked_pull_request
+from app.workspace_state import invalidate_codex_session, mark_workspace_linked_pull_request
 
 BOT_PR_MARKER = "<!-- incle-issue-to-pr-bot -->"
 BOT_AUTO_MERGE_MARKER = "<!-- incle-issue-to-pr-bot:auto-merge -->"
@@ -477,6 +477,7 @@ def commit_push_and_open_pr(
         changed_files = get_staged_files(workspace)
         ensure_no_protected_changes(changed_files, config)
         if not commit_message:
+            invalidate_codex_session(workspace)
             raise RuntimeError(
                 "Codex finished with local changes but no local commit. "
                 "Create the publishable commit inside the workspace before the wrapper pushes."

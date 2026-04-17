@@ -41,6 +41,7 @@ class BotRuntimeOptions:
     effort: str | None = None
     sync_base: bool = False
     request_merge: bool = False
+    fresh_workspace: bool = False
 
 
 @dataclass(frozen=True)

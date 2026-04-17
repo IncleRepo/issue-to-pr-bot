@@ -34,6 +34,7 @@ from app.agent_runner import (
     stream_task_logs,
     try_resolve_log_path,
 )
+from app.agent.service import execute_task_in_workspace
 from app.output_artifacts import get_repository_output_root
 
 
@@ -560,6 +561,49 @@ class AgentRunnerTest(unittest.TestCase):
             resolved = resolve_requested_log_path(config_path, task_id=None, latest=True)
 
         self.assertEqual(resolved, newer_log)
+
+    @patch("app.agent.service.bot_main.main")
+    @patch("app.agent.service.invalidate_codex_session")
+    @patch("app.agent.service.shutil.rmtree")
+    def test_execute_task_in_workspace_resets_codex_runtime_for_fresh_request(
+        self,
+        mock_rmtree,
+        mock_invalidate_session,
+        mock_bot_main,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir(parents=True)
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=Path(temp_dir) / "work",
+                log_path=Path(temp_dir) / "agent.log",
+            )
+            task = ClaimedTask(
+                task_id="task-fresh",
+                event_name="issue_comment",
+                delivery_id="delivery-fresh",
+                repository="IncleRepo/example",
+                default_branch="main",
+                payload={
+                    "action": "created",
+                    "repository": {"full_name": "IncleRepo/example"},
+                    "issue": {"number": 28, "title": "Title", "body": "Body"},
+                    "comment": {
+                        "id": 1,
+                        "body": "@incle-issue-to-pr-bot 기존에있는 워크스페이스 상관없이 다시 새로 구현부탁해",
+                        "user": {"login": "IncleRepo"},
+                    },
+                },
+                github_token="token",
+            )
+
+            execute_task_in_workspace(config, workspace, task)
+
+        mock_invalidate_session.assert_called_once_with(workspace)
+        mock_rmtree.assert_called()
+        mock_bot_main.assert_called_once()
 
 
 if __name__ == "__main__":

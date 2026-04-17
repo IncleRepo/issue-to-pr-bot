@@ -29,6 +29,19 @@ PLAN_ONLY_TERMS = (
     "코드 말고 계획만",
 )
 
+FRESH_WORKSPACE_TERMS = (
+    "다시 새로",
+    "처음부터 다시",
+    "새로 구현",
+    "워크스페이스 상관없이",
+    "기존 워크스페이스 상관없이",
+    "fresh workspace",
+    "from scratch",
+    "start over",
+    "ignore existing workspace",
+    "reset workspace",
+)
+
 
 def should_run_bot(comment_body: str, config: BotConfig | None = None) -> bool:
     """댓글 본문에 유효한 봇 멘션이 있으면 참을 반환한다."""
@@ -127,6 +140,9 @@ def infer_runtime_hints(instruction: str, action: str) -> dict[str, str]:
     if infer_merge_request(lowered):
         options["request_merge"] = "true"
 
+    if infer_fresh_workspace(lowered):
+        options["fresh_workspace"] = "true"
+
     return options
 
 
@@ -177,6 +193,12 @@ def infer_merge_action(lowered: str) -> bool:
     return infer_merge_request(lowered) and not has_implementation_intent(lowered)
 
 
+def infer_fresh_workspace(lowered: str) -> bool:
+    """기존 workspace/세션을 버리고 새로 시작해야 하는 의도를 감지한다."""
+
+    return contains_any_term(lowered, FRESH_WORKSPACE_TERMS)
+
+
 def has_plan_only_intent(lowered: str) -> bool:
     """구현 없이 계획만 원하는 요청인지 감지한다."""
 
@@ -222,6 +244,10 @@ def resolve_runtime_options(command: BotCommand, config: BotConfig) -> BotRuntim
     if command.action == "plan":
         request_merge = False
 
+    fresh_workspace = parse_bool_option(command.options.get("fresh_workspace"), default=False)
+    if command.action == "plan":
+        fresh_workspace = False
+
     effort = command.options.get("effort")
     if not effort and mode == "codex" and command.action in {"run", "plan"}:
         effort = infer_default_effort(command.instruction, command.action)
@@ -235,6 +261,7 @@ def resolve_runtime_options(command: BotCommand, config: BotConfig) -> BotRuntim
         effort=effort.lower() if effort else None,
         sync_base=sync_base,
         request_merge=request_merge,
+        fresh_workspace=fresh_workspace,
     )
 
 
