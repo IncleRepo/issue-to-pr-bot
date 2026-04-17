@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
 import signal
 import shutil
 import subprocess
@@ -43,6 +44,12 @@ DEFAULT_MAX_CONCURRENCY = 2
 EXECUTOR_THREAD_CAP = 8
 WORKSPACE_GC_INTERVAL_SECONDS = 1800
 INTERACTIVE_CONSOLE_MODE = False
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import termios
+    import tty
 
 
 @dataclass(frozen=True)
@@ -441,9 +448,9 @@ def format_console_help_detail() -> str:
             "  status                agent 상태 요약",
             "  update                최신 agent 설치",
             "  logs latest           가장 최근 task 로그",
-            "  logs latest -f        가장 최근 task 로그 스트리밍",
+            "  logs latest -f        가장 최근 task 로그 스트리밍 (q 로 종료)",
             "  logs <task-id>        특정 task 로그",
-            "  logs <task-id> -f     특정 task 로그 스트리밍",
+            "  logs <task-id> -f     특정 task 로그 스트리밍 (q 로 종료)",
             "  cancel <task-id>      실행 중인 task 취소",
             "  stop all              실행 중인 task를 모두 취소",
             "  quit                  task가 없을 때 serve 종료",
@@ -1064,20 +1071,82 @@ def stream_task_logs(config_path: Path, *, task_id: str | None, latest: bool, fo
         print("확인할 로그 파일이 없습니다.")
         return 1
     if not follow:
-        print(log_path.read_text(encoding="utf-8"))
+        print(log_path.read_text(encoding="utf-8", errors="replace"))
         return 0
+
+    stop_stream_event = threading.Event()
+    stop_listener = start_log_stream_stop_listener(stop_stream_event)
+    print("로그 스트리밍 중입니다. 종료하려면 `q`를 누르세요.")
     try:
-        with log_path.open("r", encoding="utf-8") as handle:
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
             while True:
+                if stop_stream_event.is_set():
+                    print()
+                    print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
+                    return 0
                 line = handle.readline()
                 if line:
                     print(line, end="")
                     continue
-                time.sleep(0.5)
+                time.sleep(0.2)
     except KeyboardInterrupt:
         print()
         print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
         return 0
+    finally:
+        stop_stream_event.set()
+        if stop_listener is not None:
+            stop_listener.join(timeout=1)
+
+
+def start_log_stream_stop_listener(stop_event: threading.Event) -> threading.Thread | None:
+    if not sys.stdin or not sys.stdin.isatty():
+        return None
+
+    listener = threading.Thread(
+        target=watch_log_stream_stop_key,
+        args=(stop_event,),
+        name="issue-to-pr-bot-log-stop-listener",
+        daemon=True,
+    )
+    listener.start()
+    return listener
+
+
+def watch_log_stream_stop_key(stop_event: threading.Event) -> None:
+    if os.name == "nt":
+        watch_log_stream_stop_key_windows(stop_event)
+        return
+    watch_log_stream_stop_key_posix(stop_event)
+
+
+def watch_log_stream_stop_key_windows(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        if not msvcrt.kbhit():
+            time.sleep(0.1)
+            continue
+        key = msvcrt.getwch()
+        if key.lower() == "q":
+            stop_event.set()
+
+
+def watch_log_stream_stop_key_posix(stop_event: threading.Event) -> None:
+    if sys.stdin is None or not sys.stdin.isatty():
+        return
+
+    file_descriptor = sys.stdin.fileno()
+    original_settings = termios.tcgetattr(file_descriptor)
+    try:
+        tty.setcbreak(file_descriptor)
+        while not stop_event.is_set():
+            readable, _, _ = select.select([file_descriptor], [], [], 0.1)
+            if not readable:
+                continue
+            key = os.read(file_descriptor, 1).decode("utf-8", errors="ignore")
+            if key.lower() == "q":
+                stop_event.set()
+    finally:
+        termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_settings)
 
 
 def resolve_requested_log_path(config_path: Path, *, task_id: str | None, latest: bool) -> Path | None:

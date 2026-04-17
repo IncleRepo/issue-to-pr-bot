@@ -30,6 +30,7 @@ from app.agent_runner import (
     run_claimed_task,
     run_command,
     run_console_update,
+    stream_task_logs,
     try_resolve_log_path,
 )
 from app.output_artifacts import get_repository_output_root
@@ -452,6 +453,28 @@ class AgentRunnerTest(unittest.TestCase):
         keep_running = handle_console_logs_command(Path(r"C:\agent\agent-config.json"), ["logs", "latest", "-f"])
         self.assertTrue(keep_running)
         mock_logs.assert_called_once_with(Path(r"C:\agent\agent-config.json"), task_id=None, latest=True, follow=True)
+
+    @patch("app.agent.service.start_log_stream_stop_listener")
+    def test_stream_task_logs_follow_stops_on_stop_event(self, mock_listener) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            tasks_root = config_path.parent / "tasks"
+            tasks_root.mkdir(parents=True)
+            log_path = tasks_root / "task-1.log"
+            log_path.write_text("line-1\n", encoding="utf-8")
+
+            def trigger_stop(stop_event):
+                stop_event.set()
+                return None
+
+            mock_listener.side_effect = trigger_stop
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                result = stream_task_logs(config_path, task_id="task-1", latest=False, follow=True)
+
+        self.assertEqual(result, 0)
+        self.assertIn("`q`를 누르세요", stdout.getvalue())
+        self.assertIn("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.", stdout.getvalue())
 
     @patch("app.agent.service.install_standalone_binary")
     def test_run_console_update_reports_latest_version(self, mock_install) -> None:
