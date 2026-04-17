@@ -470,7 +470,6 @@ class AgentRunnerTest(unittest.TestCase):
                 result = stream_task_logs(config_path, task_id="task-1", latest=False, follow=True)
 
         self.assertEqual(result, 0)
-        self.assertIn("`q`를 누르세요", stdout.getvalue())
         self.assertIn("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.", stdout.getvalue())
 
     @patch("app.agent.service.install_standalone_binary")

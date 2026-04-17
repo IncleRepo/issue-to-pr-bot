@@ -434,7 +434,7 @@ def format_console_help_banner() -> str:
             "  ps                실행 중인 task 목록",
             "  status            agent 상태 요약",
             "  update            최신 agent 설치",
-            "  logs latest -f    최신 task 로그 따라가기",
+            "  logs latest -f    최신 task 로그 따라가기 (q 로 종료)",
             "  help              전체 명령 보기",
             "  quit              콘솔 종료",
         ]
@@ -1088,7 +1088,6 @@ def stream_task_logs(config_path: Path, *, task_id: str | None, latest: bool, fo
     if not follow:
         print(log_path.read_text(encoding="utf-8", errors="replace"))
         return 0
-    print("로그 스트리밍 중입니다. 종료하려면 `q`를 누르세요.")
     try:
         with log_path.open("r", encoding="utf-8", errors="replace") as handle:
             while True:
