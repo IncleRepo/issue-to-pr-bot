@@ -299,6 +299,7 @@ def build_task_prompt(
             "",
             "Rules:",
             "- You may manage local Git state inside the workspace when needed (for example local branch switches, local commits, local rebase/merge, or local conflict resolution).",
+            "- The wrapper does not run Codex with codex-sandbox for this task.",
             "- Keep your work centered inside the assigned workspace whenever practical.",
             "- If the implementation needs supporting infrastructure for development (for example a database, cache, queue, search engine, or local service dependency), prefer creating a workspace-local Docker or Docker Compose setup instead of relying on host-level installs.",
             "- Keep any Dockerfiles, compose files, seed scripts, and related environment bootstrap assets inside the assigned workspace.",

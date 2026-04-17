@@ -232,6 +232,7 @@ class BotTest(unittest.TestCase):
         self.assertIn("write the final pull request title draft", prompt)
         self.assertIn("write the final pull request body draft", prompt)
         self.assertIn("create or amend the necessary local commits yourself", prompt)
+        self.assertIn("does not run Codex with codex-sandbox", prompt)
         self.assertIn("Keep your work centered inside the assigned workspace whenever practical.", prompt)
         self.assertIn("prefer creating a workspace-local Docker or Docker Compose setup", prompt)
         self.assertIn("instead of requesting host-level setup", prompt)
