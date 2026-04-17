@@ -296,10 +296,7 @@ def build_codex_command(
 ) -> list[str]:
     command = [
         resolve_codex_executable(),
-        "-a",
-        "never",
-        "-s",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "-C",
         str(workspace),
         "exec",
@@ -321,10 +318,7 @@ def build_codex_resume_command(
 ) -> list[str]:
     command = [
         resolve_codex_executable(),
-        "-a",
-        "never",
-        "-s",
-        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "-C",
         str(workspace),
         "exec",
