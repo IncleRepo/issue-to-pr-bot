@@ -563,14 +563,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.3",
+                        "managed_runtime_version": "0.3.4",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.3")
+            mock_install.return_value = (staged_path, "updated", "0.3.4")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
@@ -605,7 +605,7 @@ class AgentRunnerTest(unittest.TestCase):
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent"
             staged_path.write_text("new-binary", encoding="utf-8")
-            mock_install.return_value = (staged_path, "updated", "0.3.3")
+            mock_install.return_value = (staged_path, "updated", "0.3.4")
             config = AgentConfig(
                 control_plane_url="https://example.com",
                 agent_token="token",
@@ -618,7 +618,7 @@ class AgentRunnerTest(unittest.TestCase):
 
             message = install_latest_agent_runtime(config, config_path)
 
-        self.assertIn("업데이트를 예약했습니다: 0.3.3", message)
+        self.assertIn("업데이트를 예약했습니다: 0.3.4", message)
         mock_spawn_helper.assert_called_once_with(staged_path, runtime_path, config_path)
 
     def test_collect_runtime_update_wait_pids_includes_running_task_pids(self) -> None:
@@ -749,6 +749,46 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertIn(get_workspace_output_root(workspace), removed_paths)
         self.assertIn(get_legacy_workspace_output_artifact_root(workspace), removed_paths)
         self.assertIn(resolve_workspace_codex_home_root(workspace), removed_paths)
+        mock_bot_main.assert_called_once()
+
+    @patch("app.agent.service.bot_main.main")
+    @patch("app.agent.service.invalidate_codex_session")
+    def test_execute_task_in_workspace_invalidates_previous_codex_session_for_every_new_task(
+        self,
+        mock_invalidate_session,
+        mock_bot_main,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir(parents=True)
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=Path(temp_dir) / "work",
+                log_path=Path(temp_dir) / "agent.log",
+            )
+            task = ClaimedTask(
+                task_id="task-normal",
+                event_name="issue_comment",
+                delivery_id="delivery-normal",
+                repository="IncleRepo/example",
+                default_branch="main",
+                payload={
+                    "action": "created",
+                    "repository": {"full_name": "IncleRepo/example"},
+                    "issue": {"number": 28, "title": "Title", "body": "Body"},
+                    "comment": {
+                        "id": 1,
+                        "body": "@incle-issue-to-pr-bot 다시 진행해줘",
+                        "user": {"login": "IncleRepo"},
+                    },
+                },
+                github_token="token",
+            )
+
+            execute_task_in_workspace(config, workspace, task)
+
+        mock_invalidate_session.assert_called_once_with(workspace)
         mock_bot_main.assert_called_once()
 
 

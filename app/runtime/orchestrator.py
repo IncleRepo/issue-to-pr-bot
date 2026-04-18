@@ -7,7 +7,11 @@ import traceback
 from pathlib import Path
 
 from app.attachments import collect_attachment_context
-from app.auto_merge import handle_auto_merge_event, handle_pull_request_review_event
+from app.auto_merge import (
+    handle_auto_merge_event,
+    handle_pull_request_review_event,
+    request_pull_request_merge_with_conflict_recovery,
+)
 from app.codex_runner import create_codex_pr, run_codex_plan
 from app.config import BOT_MENTION, BotConfig, load_config
 from app.domain.models import BotCommand, BotRuntimeOptions, IssueRequest
@@ -16,7 +20,6 @@ from app.github_pr import (
     PullRequestResult,
     apply_issue_metadata_if_possible,
     create_test_pr,
-    request_pull_request_merge,
 )
 from app.prompting import PreparedPrompt, prepare_prompt
 from app.repo_context import MissingContextError, collect_context_documents, get_external_context_root
@@ -224,12 +227,13 @@ def handle_merge_request(
     if not pull_request_number:
         raise RuntimeError("Could not determine the target pull request number for merge.")
 
-    if workspace and config:
-        from app.auto_merge import maybe_prepare_pull_request_for_merge
-
-        maybe_prepare_pull_request_for_merge(workspace, config, request.repository, pull_request_number, token)
-
-    return request_pull_request_merge(request.repository, pull_request_number, token)
+    return request_pull_request_merge_with_conflict_recovery(
+        request.repository,
+        pull_request_number,
+        token,
+        workspace=workspace,
+        config=config,
+    )
 
 
 def maybe_apply_issue_metadata(request: IssueRequest, workspace: Path) -> None:

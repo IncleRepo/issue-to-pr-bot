@@ -213,7 +213,7 @@ class MainTest(unittest.TestCase):
         create_comment_mock.assert_not_called()
 
     @patch("app.runtime.orchestrator.post_merge_request_comment")
-    @patch("app.runtime.orchestrator.request_pull_request_merge")
+    @patch("app.runtime.orchestrator.request_pull_request_merge_with_conflict_recovery")
     @patch("app.runtime.orchestrator.prepare_prompt")
     def test_run_bot_skips_prompt_preparation_for_merge_action(
         self,
@@ -243,7 +243,13 @@ class MainTest(unittest.TestCase):
             run_bot(Path("."), BotConfig(), request)
 
         prepare_prompt_mock.assert_not_called()
-        request_pull_request_merge_mock.assert_called_once_with("IncleRepo/issue-to-pr-bot", 21, "token")
+        request_pull_request_merge_mock.assert_called_once_with(
+            "IncleRepo/issue-to-pr-bot",
+            21,
+            "token",
+            workspace=Path("."),
+            config=BotConfig(),
+        )
         post_merge_request_comment_mock.assert_called_once()
 
 

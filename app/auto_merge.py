@@ -10,8 +10,9 @@ from app.codex_runner import (
     run_codex,
     should_rerun_codex_after_sync,
 )
-from app.config import BOT_MENTION, BotConfig, get_git_sync_rule
+from app.config import BOT_MENTION, BotConfig, GitSyncRule, get_git_sync_rule
 from app.github_pr import (
+    MergeRequestResult,
     create_issue_comment,
     ensure_no_protected_changes,
     get_pull_request,
@@ -28,7 +29,7 @@ from app.github_pr import (
     apply_base_sync_strategy,
     unstage_output_artifacts,
 )
-from app.prompting import prepare_prompt
+from app.prompting import PreparedPrompt, prepare_prompt
 from app.verification import resolve_verification_plan, run_verification
 
 
@@ -88,9 +89,21 @@ def attempt_auto_merge(
         maybe_prepare_pull_request_for_merge(workspace, config, repository, pull_request_number, token)
 
     if payload.get("review") and payload.get("pull_request"):
-        result = request_pull_request_merge(repository, pull_request_number, token)
+        result = request_pull_request_merge_with_conflict_recovery(
+            repository,
+            pull_request_number,
+            token,
+            workspace=workspace,
+            config=config,
+        )
         return result.merge_sha
-    return try_requested_auto_merge_pull_request(repository, pull_request_number, token)
+    return try_requested_auto_merge_pull_request_with_conflict_recovery(
+        repository,
+        pull_request_number,
+        token,
+        workspace=workspace,
+        config=config,
+    )
 
 
 def maybe_prepare_pull_request_for_merge(
@@ -103,7 +116,116 @@ def maybe_prepare_pull_request_for_merge(
     rule = get_git_sync_rule(config, "before_merge")
     if not rule or rule.confidence not in {"high", "explicit"}:
         return
+    _prepare_pull_request_branch_for_merge(
+        workspace,
+        config,
+        repository,
+        pull_request_number,
+        token,
+        rule=rule,
+        rerun_reason="merge 전 base sync 이후 상태를 맞추기 위해 Codex를 한 번 더 실행합니다.",
+    )
 
+
+def request_pull_request_merge_with_conflict_recovery(
+    repository: str,
+    pull_request_number: int,
+    token: str,
+    *,
+    workspace: Path | None,
+    config: BotConfig | None,
+) -> MergeRequestResult:
+    result = request_pull_request_merge(repository, pull_request_number, token)
+    if result.merge_sha or workspace is None or config is None:
+        return result
+    if not pull_request_has_merge_conflicts(repository, pull_request_number, token):
+        return result
+
+    print("GitHub merge가 conflict 상태로 막혀 Codex에게 정리 후 다시 merge를 시도합니다.")
+    recover_pull_request_merge_conflicts_with_codex(workspace, config, repository, pull_request_number, token)
+    retry_result = request_pull_request_merge(repository, pull_request_number, token)
+    if not retry_result.merge_sha and pull_request_has_merge_conflicts(repository, pull_request_number, token):
+        raise RuntimeError("Codex가 merge conflict를 정리한 뒤에도 PR이 여전히 conflicted 상태라 merge를 완료하지 못했습니다.")
+    return retry_result
+
+
+def try_requested_auto_merge_pull_request_with_conflict_recovery(
+    repository: str,
+    pull_request_number: int,
+    token: str,
+    *,
+    workspace: Path | None,
+    config: BotConfig | None,
+) -> str | None:
+    merge_sha = try_requested_auto_merge_pull_request(repository, pull_request_number, token)
+    if merge_sha or workspace is None or config is None:
+        return merge_sha
+    if not pull_request_has_merge_conflicts(repository, pull_request_number, token):
+        return None
+
+    print("GitHub auto-merge가 conflict 상태로 막혀 Codex에게 정리 후 다시 merge를 시도합니다.")
+    recover_pull_request_merge_conflicts_with_codex(workspace, config, repository, pull_request_number, token)
+    retry_merge_sha = try_requested_auto_merge_pull_request(repository, pull_request_number, token)
+    if retry_merge_sha is None and pull_request_has_merge_conflicts(repository, pull_request_number, token):
+        raise RuntimeError("Codex가 merge conflict를 정리한 뒤에도 PR이 여전히 conflicted 상태라 auto-merge를 완료하지 못했습니다.")
+    return retry_merge_sha
+
+
+def pull_request_has_merge_conflicts(repository: str, pull_request_number: int, token: str) -> bool:
+    pull_request = get_pull_request(repository, pull_request_number, token)
+    mergeable_state = str(pull_request.get("mergeable_state") or "").strip().lower()
+    if mergeable_state == "dirty":
+        return True
+    return False
+
+
+def recover_pull_request_merge_conflicts_with_codex(
+    workspace: Path,
+    config: BotConfig,
+    repository: str,
+    pull_request_number: int,
+    token: str,
+) -> None:
+    pull_request = get_pull_request(repository, pull_request_number, token)
+    base_branch = ((pull_request.get("base") or {}).get("ref") or "").strip() or "main"
+    configured_rule = get_git_sync_rule(config, "before_merge")
+    if configured_rule and configured_rule.confidence in {"high", "explicit"}:
+        rule = configured_rule
+    else:
+        rule = GitSyncRule(
+            phase="before_merge",
+            action="merge",
+            base_branch=base_branch,
+            require_conflict_free=True,
+            confidence="wrapper",
+            source="merge-conflict-recovery",
+        )
+    _prepare_pull_request_branch_for_merge(
+        workspace,
+        config,
+        repository,
+        pull_request_number,
+        token,
+        rule=rule,
+        prompt_suffix_lines=[
+            "- GitHub merge was blocked because the PR is currently in a conflicted merge state.",
+            "- Resolve the merge conflicts against the current base branch in the worktree, keep the intended behavior, and leave the branch ready to merge.",
+        ],
+        rerun_reason="merge conflict를 정리하고 다시 merge할 수 있게 Codex를 한 번 더 실행합니다.",
+    )
+
+
+def _prepare_pull_request_branch_for_merge(
+    workspace: Path,
+    config: BotConfig,
+    repository: str,
+    pull_request_number: int,
+    token: str,
+    *,
+    rule: GitSyncRule,
+    prompt_suffix_lines: list[str] | None = None,
+    rerun_reason: str,
+) -> None:
     pull_request = get_pull_request(repository, pull_request_number, token)
     request = build_merge_request_from_pull_request(repository, pull_request)
     target = checkout_pull_request_branch(request, workspace)
@@ -120,16 +242,19 @@ def maybe_prepare_pull_request_for_merge(
         allow_autostash=False,
     )
     log_base_sync_result(sync_result, before_codex=False)
+    rerun_codex = should_rerun_codex_after_sync(sync_result)
 
-    if rule.require_conflict_free and has_unmerged_paths(workspace):
+    if rule.require_conflict_free and has_unmerged_paths(workspace) and not rerun_codex:
         raise RuntimeError(
             f"문서 규칙상 merge 전에 `{target.base_branch}` 반영 후 충돌이 없어야 하지만 unresolved conflict가 남아 있습니다."
         )
 
-    if should_rerun_codex_after_sync(sync_result):
+    if rerun_codex:
         prepared_prompt = prepare_prompt(request, workspace, config, action="run")
         followup_prompt = build_post_sync_prompt(prepared_prompt, sync_result, rule)
-        print("merge 전 base sync 이후 상태를 맞추기 위해 Codex를 한 번 더 실행합니다.")
+        if prompt_suffix_lines:
+            followup_prompt = append_follow_up_prompt_lines(followup_prompt, prompt_suffix_lines)
+        print(rerun_reason)
         run_codex(
             request,
             workspace,
@@ -145,7 +270,7 @@ def maybe_prepare_pull_request_for_merge(
 
     changed_head = get_head_sha(workspace) != before_head
     verification_commands: list[str] = []
-    if changed_head or should_rerun_codex_after_sync(sync_result):
+    if changed_head or rerun_codex:
         verification_plan = resolve_verification_plan(config, workspace, request)
         verification_commands = verification_plan.commands
         if verification_commands:
@@ -166,6 +291,20 @@ def maybe_prepare_pull_request_for_merge(
 
     if changed_head:
         push_branch(repository, target.branch_name, token, workspace)
+
+
+def append_follow_up_prompt_lines(prepared_prompt: PreparedPrompt, lines: list[str]) -> PreparedPrompt:
+    follow_up = "\n".join([prepared_prompt.prompt, *lines])
+    return PreparedPrompt(
+        prompt=follow_up,
+        attachment_info=prepared_prompt.attachment_info,
+        available_secret_keys=prepared_prompt.available_secret_keys,
+        repository_context=prepared_prompt.repository_context,
+        project_summary=prepared_prompt.project_summary,
+        code_context=prepared_prompt.code_context,
+        attachment_context=prepared_prompt.attachment_context,
+        metrics=prepared_prompt.metrics,
+    )
 
 
 def build_merge_request_from_pull_request(repository: str, pull_request: dict) -> IssueRequest:

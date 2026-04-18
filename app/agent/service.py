@@ -699,6 +699,9 @@ def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: Claime
         log_message(config, f"작업 실행: {workspace}", log_path=log_path)
         with temporary_env(env_updates), change_directory(workspace):
             try:
+                # Always start a newly claimed task from a fresh Codex conversation,
+                # while still allowing follow-up runs within the same task to resume.
+                invalidate_codex_session(workspace)
                 if command and command.options.get("fresh_workspace") == "true":
                     reset_workspace_runtime_for_fresh_run(workspace, config, log_path=log_path)
                 ensure_task_output_root(request, workspace)
@@ -717,7 +720,6 @@ def reset_workspace_runtime_for_fresh_run(
     log_path: Path | None = None,
 ) -> None:
     log_message(config, "fresh 요청을 감지해 기존 Codex 세션과 런타임 상태를 정리합니다.", log_path=log_path)
-    invalidate_codex_session(workspace)
     shutil.rmtree(get_workspace_input_root(workspace), ignore_errors=True)
     shutil.rmtree(get_workspace_output_root(workspace), ignore_errors=True)
     shutil.rmtree(get_legacy_workspace_output_artifact_root(workspace), ignore_errors=True)

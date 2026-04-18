@@ -2,9 +2,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.auto_merge import handle_auto_merge_event, handle_pull_request_review_event
+from app.auto_merge import (
+    handle_auto_merge_event,
+    handle_pull_request_review_event,
+    request_pull_request_merge_with_conflict_recovery,
+    try_requested_auto_merge_pull_request_with_conflict_recovery,
+)
 from app.config import BotConfig, GitSyncRule
-from app.github_pr import BOT_AUTO_MERGE_MARKER, BOT_PR_MARKER, is_bot_pull_request, try_auto_merge_pull_request
+from app.github_pr import BOT_AUTO_MERGE_MARKER, BOT_PR_MARKER, MergeRequestResult, is_bot_pull_request, try_auto_merge_pull_request
 
 
 class AutoMergeTest(unittest.TestCase):
@@ -32,13 +37,14 @@ class AutoMergeTest(unittest.TestCase):
         self.assertIsNone(sha)
 
     @patch("app.auto_merge.create_issue_comment")
-    @patch("app.auto_merge.request_pull_request_merge")
+    @patch("app.auto_merge.request_pull_request_merge_with_conflict_recovery")
     def test_handle_pull_request_review_event_comments_after_merge(self, request_merge_mock, create_comment_mock) -> None:
-        request_merge_mock.return_value = type(
-            "MergeResult",
-            (),
-            {"merge_sha": "abc123"},
-        )()
+        request_merge_mock.return_value = MergeRequestResult(
+            pull_request_url="https://example.com/pr/7",
+            requested=True,
+            merged=True,
+            merge_sha="abc123",
+        )
         payload = {
             "repository": {"full_name": "IncleRepo/issue-to-pr-bot"},
             "review": {"state": "approved"},
@@ -48,7 +54,13 @@ class AutoMergeTest(unittest.TestCase):
         with patch.dict("os.environ", {"BOT_GITHUB_TOKEN": "token"}, clear=True):
             handle_pull_request_review_event(payload)
 
-        request_merge_mock.assert_called_once_with("IncleRepo/issue-to-pr-bot", 7, "token")
+        request_merge_mock.assert_called_once_with(
+            "IncleRepo/issue-to-pr-bot",
+            7,
+            "token",
+            workspace=None,
+            config=None,
+        )
         create_comment_mock.assert_called_once()
 
     @patch("app.auto_merge.create_issue_comment")
@@ -116,7 +128,7 @@ class AutoMergeTest(unittest.TestCase):
         create_comment_mock.assert_called_once()
 
     @patch("app.auto_merge.create_issue_comment")
-    @patch("app.auto_merge.request_pull_request_merge")
+    @patch("app.auto_merge.request_pull_request_merge_with_conflict_recovery")
     @patch("app.auto_merge.maybe_prepare_pull_request_for_merge")
     def test_handle_pull_request_review_event_applies_before_merge_rule_when_configured(
         self,
@@ -124,11 +136,12 @@ class AutoMergeTest(unittest.TestCase):
         request_merge_mock,
         create_comment_mock,
     ) -> None:
-        request_merge_mock.return_value = type(
-            "MergeResult",
-            (),
-            {"merge_sha": "abc123"},
-        )()
+        request_merge_mock.return_value = MergeRequestResult(
+            pull_request_url="https://example.com/pr/7",
+            requested=True,
+            merged=True,
+            merge_sha="abc123",
+        )
         payload = {
             "repository": {"full_name": "IncleRepo/issue-to-pr-bot"},
             "review": {"state": "approved"},
@@ -161,8 +174,75 @@ class AutoMergeTest(unittest.TestCase):
             7,
             "token",
         )
-        request_merge_mock.assert_called_once_with("IncleRepo/issue-to-pr-bot", 7, "token")
+        request_merge_mock.assert_called_once_with(
+            "IncleRepo/issue-to-pr-bot",
+            7,
+            "token",
+            workspace=Path("."),
+            config=config,
+        )
         create_comment_mock.assert_called_once()
+
+    @patch("app.auto_merge.recover_pull_request_merge_conflicts_with_codex")
+    @patch("app.auto_merge.get_pull_request")
+    @patch("app.auto_merge.request_pull_request_merge")
+    def test_request_pull_request_merge_with_conflict_recovery_retries_dirty_pr(
+        self,
+        request_merge_mock,
+        get_pull_request_mock,
+        recover_mock,
+    ) -> None:
+        request_merge_mock.side_effect = [
+            MergeRequestResult(
+                pull_request_url="https://example.com/pr/7",
+                requested=True,
+                merged=False,
+                merge_sha=None,
+            ),
+            MergeRequestResult(
+                pull_request_url="https://example.com/pr/7",
+                requested=True,
+                merged=True,
+                merge_sha="abc123",
+            ),
+        ]
+        get_pull_request_mock.return_value = {"number": 7, "mergeable_state": "dirty"}
+
+        result = request_pull_request_merge_with_conflict_recovery(
+            "IncleRepo/issue-to-pr-bot",
+            7,
+            "token",
+            workspace=Path("."),
+            config=BotConfig(),
+        )
+
+        self.assertEqual(result.merge_sha, "abc123")
+        self.assertEqual(request_merge_mock.call_count, 2)
+        recover_mock.assert_called_once_with(Path("."), BotConfig(), "IncleRepo/issue-to-pr-bot", 7, "token")
+
+    @patch("app.auto_merge.recover_pull_request_merge_conflicts_with_codex")
+    @patch("app.auto_merge.get_pull_request")
+    @patch("app.auto_merge.try_requested_auto_merge_pull_request")
+    def test_try_requested_auto_merge_pull_request_with_conflict_recovery_retries_dirty_pr(
+        self,
+        try_merge_mock,
+        get_pull_request_mock,
+        recover_mock,
+    ) -> None:
+        try_merge_mock.side_effect = [None, "abc123"]
+        get_pull_request_mock.return_value = {"number": 7, "mergeable_state": "dirty"}
+
+        merge_sha = try_requested_auto_merge_pull_request_with_conflict_recovery(
+            "IncleRepo/issue-to-pr-bot",
+            7,
+            "token",
+            workspace=Path("."),
+            config=BotConfig(),
+        )
+
+        self.assertEqual(merge_sha, "abc123")
+        self.assertEqual(try_merge_mock.call_count, 2)
+        recover_mock.assert_called_once_with(Path("."), BotConfig(), "IncleRepo/issue-to-pr-bot", 7, "token")
 
 
 if __name__ == "__main__":
