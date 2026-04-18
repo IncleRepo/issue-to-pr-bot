@@ -544,14 +544,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.0",
+                        "managed_runtime_version": "0.3.1",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.0")
+            mock_install.return_value = (staged_path, "updated", "0.3.1")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)

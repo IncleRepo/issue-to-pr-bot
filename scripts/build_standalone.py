@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import tarfile
@@ -53,8 +54,10 @@ def build_role(role: str) -> None:
         str(REPOSITORY_ROOT / "build" / "pyinstaller"),
         "--specpath",
         str(REPOSITORY_ROOT / "build" / "spec"),
-        "--collect-all",
-        "app",
+        "--add-data",
+        build_pyinstaller_data_arg(REPOSITORY_ROOT / "app" / "manager_templates", "app/manager_templates"),
+        "--add-data",
+        build_pyinstaller_data_arg(REPOSITORY_ROOT / "app" / "worker_templates", "app/worker_templates"),
         str(entry),
     ]
     subprocess.run(command, cwd=str(REPOSITORY_ROOT), check=True)
@@ -66,6 +69,11 @@ def build_role(role: str) -> None:
     else:
         with tarfile.open(archive_path, "w:gz") as archive:
             archive.add(built_binary, arcname=built_binary.name)
+
+
+def build_pyinstaller_data_arg(source: Path, target: str) -> str:
+    separator = ";" if os.name == "nt" else ":"
+    return f"{source}{separator}{target}"
 
 
 if __name__ == "__main__":
