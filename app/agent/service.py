@@ -56,6 +56,18 @@ else:
     import tty
 
 
+def build_hidden_windows_subprocess_kwargs() -> dict[str, object]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+        "startupinfo": startupinfo,
+    }
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     control_plane_url: str
@@ -728,7 +740,16 @@ def report_task_completion(config: AgentConfig, task_id: str, status: str, summa
 
 
 def run_command(command: list[str], config: AgentConfig | None = None, *, log_path: Path | None = None) -> None:
-    result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    result = subprocess.run(
+        command,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        **build_hidden_windows_subprocess_kwargs(),
+    )
     if (result.stdout or "").strip():
         log_message(config, (result.stdout or "").rstrip(), log_path=log_path)
     if result.returncode != 0:
@@ -811,7 +832,16 @@ def resolve_task_pid_path(config_path: Path, task_id: str) -> Path:
 
 def is_process_running(process_id: int) -> bool:
     if os.name == "nt":
-        result = subprocess.run(["tasklist", "/FI", f"PID eq {process_id}"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", check=False)
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {process_id}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            **build_hidden_windows_subprocess_kwargs(),
+        )
         return str(process_id) in (result.stdout or "")
     try:
         os.kill(process_id, 0)
@@ -1392,7 +1422,13 @@ def replace_runtime_binary(source: Path, target: Path, *, wait_pid: int, config_
 
 def terminate_process_tree(process_id: int) -> None:
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process_id), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(
+            ["taskkill", "/PID", str(process_id), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            **build_hidden_windows_subprocess_kwargs(),
+        )
         return
     os.kill(process_id, signal.SIGTERM)
 

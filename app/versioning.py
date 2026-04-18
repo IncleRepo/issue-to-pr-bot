@@ -2,5 +2,5 @@
 
 from __future__ import annotations
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 RELEASE_REPOSITORY = "IncleRepo/issue-to-pr-bot"

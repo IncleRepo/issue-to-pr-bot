@@ -333,6 +333,33 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(kwargs["encoding"], "utf-8")
         self.assertEqual(kwargs["errors"], "replace")
 
+    @patch("app.agent.service.subprocess.run")
+    def test_run_command_hides_windows_console(self, mock_run) -> None:
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.returncode = 0
+        startupinfo = type("StartupInfo", (), {"dwFlags": 0, "wShowWindow": 1})()
+
+        with patch("app.agent.service.os.name", "nt"), patch(
+            "app.agent.service.subprocess.CREATE_NO_WINDOW",
+            0x8000000,
+            create=True,
+        ), patch(
+            "app.agent.service.subprocess.STARTF_USESHOWWINDOW",
+            0x1,
+            create=True,
+        ), patch(
+            "app.agent.service.subprocess.STARTUPINFO",
+            return_value=startupinfo,
+            create=True,
+        ):
+            run_command(["git", "status"])
+
+        _args, kwargs = mock_run.call_args
+        self.assertEqual(kwargs["creationflags"], 0x8000000)
+        self.assertIs(kwargs["startupinfo"], startupinfo)
+        self.assertEqual(startupinfo.dwFlags, 0x1)
+        self.assertEqual(startupinfo.wShowWindow, 0)
+
     @patch("app.agent.service.resolve_task_python", return_value=Path(r"C:\Python\python.exe"))
     @patch("app.agent.service.subprocess.Popen")
     def test_run_task_subprocess_detaches_console_on_windows(self, mock_popen, _mock_python) -> None:
@@ -517,14 +544,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.2.0",
+                        "managed_runtime_version": "0.3.0",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.2.0")
+            mock_install.return_value = (staged_path, "updated", "0.3.0")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
