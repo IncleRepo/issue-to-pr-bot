@@ -1,12 +1,13 @@
 import html
 import re
-import tempfile
+import shutil
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.bot import IssueRequest
+from app.output_artifacts import get_workspace_attachment_root, resolve_workspace_root
 
 
 MAX_ATTACHMENTS = 5
@@ -74,8 +75,8 @@ class AttachmentContext:
     skipped: list[AttachmentSkip]
 
 
-def collect_attachment_context(request: IssueRequest) -> AttachmentContext:
-    attachment_dir = prepare_attachment_dir(request)
+def collect_attachment_context(request: IssueRequest, workspace: Path | None = None) -> AttachmentContext:
+    attachment_dir = prepare_attachment_dir(request, workspace)
     attachments: list[AttachmentInfo] = []
     skipped: list[AttachmentSkip] = []
 
@@ -113,9 +114,10 @@ def clean_url(url: str) -> str:
     return url.rstrip(".,;:!?)]}")
 
 
-def prepare_attachment_dir(request: IssueRequest) -> Path:
-    root = Path(tempfile.gettempdir()) / "issue-to-pr-bot-attachments"
-    directory = root / f"issue-{request.issue_number}-comment-{request.comment_id or 'none'}"
+def prepare_attachment_dir(request: IssueRequest, workspace: Path | None = None) -> Path:
+    root = get_workspace_attachment_root(resolve_workspace_root(workspace))
+    directory = root / f"comment-{request.comment_id or 'none'}"
+    shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

@@ -156,7 +156,7 @@ def run_bot(workspace: Path, config: BotConfig, request: IssueRequest) -> None:
         prepared_prompt = prepare_prompt(request, workspace, config, command.action)
         attachment_info = prepared_prompt.attachment_info
     else:
-        attachment_info = collect_attachment_context(request)
+        attachment_info = collect_attachment_context(request, workspace)
 
     if prepared_prompt:
         print(f"Available secret env keys: {format_secret_keys_for_log(prepared_prompt.available_secret_keys)}")

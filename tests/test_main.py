@@ -50,7 +50,7 @@ class MainTest(unittest.TestCase):
         subprocess_run_mock.return_value = subprocess.CompletedProcess(
             args=["git"],
             returncode=0,
-            stdout="?? bot-output/pr-body.md\n?? bot-output/pr-summary.md\n M src/main.js\n",
+            stdout="?? bot-output/pr-body.md\n?? .issue-to-pr-bot/output/pr-summary.md\n M src/main.js\n",
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:

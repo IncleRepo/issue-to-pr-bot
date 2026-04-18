@@ -225,6 +225,8 @@ class BotTest(unittest.TestCase):
             prompt,
         )
         self.assertIn("The wrapper will supervise remote publish and merge steps after your local work is done.", prompt)
+        self.assertIn("workspace-only scratch files", prompt)
+        self.assertIn("Never include those workspace-only files in commits", prompt)
         self.assertIn(str(title_path), prompt)
         self.assertIn(str(body_path), prompt)
         self.assertIn("follow its structure and fill it naturally", prompt)
@@ -361,7 +363,7 @@ class BotTest(unittest.TestCase):
         )
         config = BotConfig(codex_commit_message_template="{commit_type}: {issue_title}")
 
-        with TemporaryDirectory() as temp_dir, patch.dict("os.environ", {"BOT_OUTPUT_ARTIFACT_ROOT": temp_dir}):
+        with TemporaryDirectory() as temp_dir, patch.dict("os.environ", {"BOT_WORKSPACE_ROOT": temp_dir}):
             draft_path = get_commit_message_draft_path(request)
             draft_path.parent.mkdir(parents=True, exist_ok=True)
             draft_path.write_text("[Feature] 배경에 구름 추가\n", encoding="utf-8")
@@ -380,7 +382,7 @@ class BotTest(unittest.TestCase):
         )
         config = BotConfig(codex_commit_message_template="{commit_type}: {issue_title}")
 
-        with TemporaryDirectory() as temp_dir, patch.dict("os.environ", {"BOT_OUTPUT_ARTIFACT_ROOT": temp_dir}):
+        with TemporaryDirectory() as temp_dir, patch.dict("os.environ", {"BOT_WORKSPACE_ROOT": temp_dir}):
             draft_path = get_commit_message_draft_path(request)
             draft_path.parent.mkdir(parents=True, exist_ok=True)
             draft_path.write_text("fix: 충돌 판정 수정\n", encoding="utf-8")

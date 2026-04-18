@@ -26,7 +26,12 @@ from app.github_pr import (
     write_marker_file,
 )
 from app.domain.models import MetadataPlan
-from app.output_artifacts import get_pr_body_draft_path, get_pr_summary_draft_path, get_pr_title_draft_path
+from app.output_artifacts import (
+    get_legacy_task_output_root,
+    get_pr_body_draft_path,
+    get_pr_summary_draft_path,
+    get_pr_title_draft_path,
+)
 
 
 class GitHubPrTest(unittest.TestCase):
@@ -82,7 +87,7 @@ class GitHubPrTest(unittest.TestCase):
             returncode=0,
             stdout=(
                 "?? bot-output/pr-body.md\n"
-                "?? .runtime-output/issue-1/pr-body.md\n"
+                "?? .issue-to-pr-bot/output/pr-body.md\n"
                 "?? Microsoft/\n"
                 " M src/main.js\n"
             ),
@@ -204,16 +209,14 @@ class GitHubPrTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            artifact_root = workspace / ".runtime-output"
-            with patch.dict(environ, {"BOT_OUTPUT_ARTIFACT_ROOT": str(artifact_root)}, clear=False):
-                summary_path = get_pr_summary_draft_path(request)
-                summary_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_path.write_text(
-                    "- 플레이어 이동 로직을 추가했습니다.\n- 점프와 중력 처리를 구현했습니다.",
-                    encoding="utf-8",
-                )
+            summary_path = get_pr_summary_draft_path(request, workspace)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(
+                "- 플레이어 이동 로직을 추가했습니다.\n- 점프와 중력 처리를 구현했습니다.",
+                encoding="utf-8",
+            )
 
-                body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
+            body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
 
         self.assertIn("- 플레이어 이동 로직을 추가했습니다.", body)
         self.assertIn("- 점프와 중력 처리를 구현했습니다.", body)
@@ -248,32 +251,57 @@ class GitHubPrTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            artifact_root = workspace / ".runtime-output"
-            with patch.dict(environ, {"BOT_OUTPUT_ARTIFACT_ROOT": str(artifact_root)}, clear=False):
-                body_path = get_pr_body_draft_path(request)
-                body_path.parent.mkdir(parents=True, exist_ok=True)
-                body_path.write_text(
-                    "\n".join(
-                        [
-                            "## 변경 내용",
-                            "",
-                            "- 플레이어 이동 입력을 구현했습니다.",
-                            "- 템플릿 구조를 유지하면서 설명을 채웠습니다.",
-                            "",
-                            "## 관련 이슈",
-                            "",
-                            "Closes #{{ISSUE_NUMBER}}",
-                        ]
-                    ),
-                    encoding="utf-8",
-                )
+            body_path = get_pr_body_draft_path(request, workspace)
+            body_path.parent.mkdir(parents=True, exist_ok=True)
+            body_path.write_text(
+                "\n".join(
+                    [
+                        "## 변경 내용",
+                        "",
+                        "- 플레이어 이동 입력을 구현했습니다.",
+                        "- 템플릿 구조를 유지하면서 설명을 채웠습니다.",
+                        "",
+                        "## 관련 이슈",
+                        "",
+                        "Closes #{{ISSUE_NUMBER}}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
 
-                body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
+            body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
 
         self.assertIn("- 플레이어 이동 입력을 구현했습니다.", body)
         self.assertNotIn("- 템플릿 질문", body)
         self.assertIn("Closes #15", body)
         self.assertIn(BOT_PR_MARKER, body)
+
+    def test_build_pull_request_body_reads_legacy_runtime_output_as_fallback(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=16,
+            issue_title="Legacy fallback",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 구현해줘",
+            comment_author="IncleRepo",
+            comment_id=16,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            workspace.joinpath(".github").mkdir()
+            workspace.joinpath(".github", "pull_request_template.md").write_text(
+                "## 변경 내용\n\n- 템플릿 질문\n",
+                encoding="utf-8",
+            )
+            legacy_body_path = get_legacy_task_output_root(request, workspace) / "pr-body.md"
+            legacy_body_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_body_path.write_text("## 변경 내용\n\n- 레거시 경로에서 읽었습니다.\n", encoding="utf-8")
+
+            body = build_pull_request_body(request, BotConfig(), workspace, ["index.html"])
+
+        self.assertIn("- 레거시 경로에서 읽었습니다.", body)
+        self.assertNotIn("- 템플릿 질문", body)
 
     def test_build_pull_request_body_injects_llm_summary_into_existing_section(self) -> None:
         request = IssueRequest(
@@ -304,16 +332,14 @@ class GitHubPrTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            artifact_root = workspace / ".runtime-output"
-            with patch.dict(environ, {"BOT_OUTPUT_ARTIFACT_ROOT": str(artifact_root)}, clear=False):
-                summary_path = get_pr_summary_draft_path(request)
-                summary_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_path.write_text(
-                    "- 키보드 입력으로 좌우 이동을 추가했습니다.\n- HUD에 좌표 표시를 추가했습니다.",
-                    encoding="utf-8",
-                )
+            summary_path = get_pr_summary_draft_path(request, workspace)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(
+                "- 키보드 입력으로 좌우 이동을 추가했습니다.\n- HUD에 좌표 표시를 추가했습니다.",
+                encoding="utf-8",
+            )
 
-                body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
+            body = build_pull_request_body(request, BotConfig(), workspace, ["index.html", "main.js"])
 
         self.assertIn("- 키보드 입력으로 좌우 이동을 추가했습니다.", body)
         self.assertIn("- HUD에 좌표 표시를 추가했습니다.", body)
@@ -400,7 +426,7 @@ class GitHubPrTest(unittest.TestCase):
                 patch("app.github_pr.unstage_output_artifacts"),
                 patch("app.github_pr.has_staged_changes", return_value=False),
                 patch("app.github_pr.branch_has_publishable_commits", return_value=True),
-                patch("app.github_pr.get_branch_changed_files", return_value=["src/main.js"]),
+                patch("app.github_pr.get_raw_branch_changed_files", return_value=["src/main.js"]),
                 patch("app.github_pr.push_branch") as push_branch_mock,
                 patch("app.github_pr.ensure_pull_request", return_value="https://example.com/pr/22"),
                 patch("app.github_pr.apply_pull_request_metadata_if_possible"),
@@ -435,6 +461,7 @@ class GitHubPrTest(unittest.TestCase):
                 patch.dict(environ, {"BOT_GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": request.repository}, clear=False),
                 patch("app.github_pr.run_git") as run_git_mock,
                 patch("app.github_pr.get_current_branch", return_value="feat/codex-committed"),
+                patch("app.github_pr.invalidate_codex_session"),
                 patch("app.github_pr.unstage_output_artifacts"),
                 patch("app.github_pr.has_staged_changes", return_value=True),
                 patch("app.github_pr.get_staged_files", return_value=["src/main.js"]),
@@ -452,43 +479,78 @@ class GitHubPrTest(unittest.TestCase):
         self.assertIn("no local commit", str(context.exception))
         self.assertFalse(any(call.args[0][:2] == ["commit", "-m"] for call in run_git_mock.call_args_list))
 
-    def test_ensure_pull_request_prefers_codex_title_draft(self) -> None:
+    def test_commit_push_and_open_pr_rejects_non_publishable_workspace_files_in_branch_diff(self) -> None:
         request = IssueRequest(
             repository="IncleRepo/sample-repo",
             issue_number=24,
-            issue_title="[Feature] 배경에 구름 추가",
+            issue_title="Block workspace scratch files",
             issue_body="",
             comment_body="@incle-issue-to-pr-bot 구현해줘",
             comment_author="IncleRepo",
             comment_id=24,
         )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with (
+                patch.dict(environ, {"BOT_GITHUB_TOKEN": "token", "GITHUB_REPOSITORY": request.repository}, clear=False),
+                patch("app.github_pr.run_git"),
+                patch("app.github_pr.get_current_branch", return_value="feat/current-branch"),
+                patch("app.github_pr.unstage_output_artifacts"),
+                patch("app.github_pr.has_staged_changes", return_value=False),
+                patch("app.github_pr.branch_has_publishable_commits", return_value=True),
+                patch("app.github_pr.get_raw_branch_changed_files", return_value=[".issue-to-pr-bot/output/pr-body.md"]),
+                patch("app.github_pr.push_branch") as push_branch_mock,
+                patch("app.github_pr.ensure_pull_request") as ensure_pr_mock,
+            ):
+                with self.assertRaises(RuntimeError) as context:
+                    commit_push_and_open_pr(
+                        request=request,
+                        workspace=workspace,
+                        config=BotConfig(),
+                        branch_name="wrapper-branch",
+                        base_branch="main",
+                    )
+
+        self.assertIn("Non-publishable workspace files are present", str(context.exception))
+        self.assertIn(".issue-to-pr-bot/output/pr-body.md", str(context.exception))
+        push_branch_mock.assert_not_called()
+        ensure_pr_mock.assert_not_called()
+
+    def test_ensure_pull_request_prefers_codex_title_draft(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/sample-repo",
+            issue_number=25,
+            issue_title="[Feature] 배경에 구름 추가",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 구현해줘",
+            comment_author="IncleRepo",
+            comment_id=25,
+        )
         config = BotConfig(pr_title_template="wrapper title fallback")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            artifact_root = workspace / ".runtime-output"
-            with patch.dict(environ, {"BOT_OUTPUT_ARTIFACT_ROOT": str(artifact_root)}, clear=False):
-                title_path = get_pr_title_draft_path(request)
-                title_path.parent.mkdir(parents=True, exist_ok=True)
-                title_path.write_text("배경에 구름 추가", encoding="utf-8")
-                with (
-                    patch("app.github_pr.find_existing_pull_request", return_value=None),
-                    patch("app.github_pr.build_pull_request_body", return_value="body"),
-                    patch("app.github_pr.github_request", return_value={"html_url": "https://example.com/pr/24"}) as github_request_mock,
-                ):
-                    pr_url = ensure_pull_request(
-                        repository=request.repository,
-                        branch_name="feat/24-clouds",
-                        base_branch="main",
-                        request=request,
-                        token="token",
-                        config=config,
-                        workspace=workspace,
-                        changed_files=["index.html"],
-                        verification_commands=[],
-                    )
+            title_path = get_pr_title_draft_path(request, workspace)
+            title_path.parent.mkdir(parents=True, exist_ok=True)
+            title_path.write_text("배경에 구름 추가", encoding="utf-8")
+            with (
+                patch("app.github_pr.find_existing_pull_request", return_value=None),
+                patch("app.github_pr.build_pull_request_body", return_value="body"),
+                patch("app.github_pr.github_request", return_value={"html_url": "https://example.com/pr/25"}) as github_request_mock,
+            ):
+                pr_url = ensure_pull_request(
+                    repository=request.repository,
+                    branch_name="feat/25-clouds",
+                    base_branch="main",
+                    request=request,
+                    token="token",
+                    config=config,
+                    workspace=workspace,
+                    changed_files=["index.html"],
+                    verification_commands=[],
+                )
 
-        self.assertEqual(pr_url, "https://example.com/pr/24")
+        self.assertEqual(pr_url, "https://example.com/pr/25")
         self.assertEqual(github_request_mock.call_args.args[3]["title"], "배경에 구름 추가")
 
     def test_sync_pull_request_branch_with_base_detects_clean_merge(self) -> None:

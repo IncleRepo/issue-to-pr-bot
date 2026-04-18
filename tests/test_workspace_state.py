@@ -11,6 +11,8 @@ from app.workspace_state import (
     mark_codex_session_ready,
     mark_workspace_linked_pull_request,
     read_workspace_metadata,
+    resolve_workspace_codex_home_root,
+    resolve_workspace_meta_path,
     should_resume_codex_session,
     touch_workspace_metadata,
 )
@@ -29,7 +31,7 @@ class WorkspaceStateTest(unittest.TestCase):
             touch_workspace_metadata(workspace, repository="IncleRepo/repo", scope_type="issue", scope_number=17)
             self.assertFalse(should_resume_codex_session(workspace))
 
-            codex_home = workspace.parent.parent / ".issue-to-pr-bot-runtime" / workspace.parent.name / workspace.name / "codex-home-root" / ".codex"
+            codex_home = resolve_workspace_codex_home_root(workspace) / ".codex"
             codex_home.mkdir(parents=True, exist_ok=True)
             mark_codex_session_ready(workspace, resumed=False)
             self.assertTrue(should_resume_codex_session(workspace))
@@ -58,6 +60,19 @@ class WorkspaceStateTest(unittest.TestCase):
 
             self.assertEqual(len(removed), 1)
             self.assertFalse(issue_workspace.exists())
+
+    def test_workspace_runtime_metadata_stays_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "IncleRepo__repo" / "issue-21"
+            workspace.mkdir(parents=True)
+
+            meta_path = resolve_workspace_meta_path(workspace)
+            codex_home_root = resolve_workspace_codex_home_root(workspace)
+
+        self.assertNotIn("/issue-21/.issue-to-pr-bot-runtime/", str(meta_path).replace("\\", "/"))
+        self.assertNotIn("/issue-21/.issue-to-pr-bot-runtime/", str(codex_home_root).replace("\\", "/"))
+        self.assertIn("/.issue-to-pr-bot-runtime/", str(meta_path).replace("\\", "/"))
+        self.assertIn("/.issue-to-pr-bot-runtime/", str(codex_home_root).replace("\\", "/"))
 
 
 if __name__ == "__main__":

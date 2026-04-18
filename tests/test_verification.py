@@ -37,7 +37,7 @@ class VerificationTest(unittest.TestCase):
         subprocess_run_mock.return_value = subprocess.CompletedProcess(
             args=["git"],
             returncode=0,
-            stdout="?? .runtime-output/issue-1/pr-body.md\n?? Microsoft/\n M README.md\n",
+            stdout="?? .issue-to-pr-bot/output/pr-body.md\n?? Microsoft/\n M README.md\n",
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:

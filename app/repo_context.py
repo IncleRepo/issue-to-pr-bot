@@ -16,8 +16,10 @@ MAX_PROJECT_TREE_DEPTH = 4
 
 IGNORED_PROJECT_DIRS = {
     ".git",
+    ".issue-to-pr-bot",
     ".mypy_cache",
     ".pytest_cache",
+    ".runtime-output",
     ".ruff_cache",
     ".venv",
     "__pycache__",

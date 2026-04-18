@@ -44,8 +44,10 @@ CODE_CONTEXT_EXTENSIONS = {
 }
 CODE_CONTEXT_DIR_SKIP = {
     ".git",
+    ".issue-to-pr-bot",
     ".mypy_cache",
     ".pytest_cache",
+    ".runtime-output",
     ".ruff_cache",
     ".venv",
     "__pycache__",
@@ -93,7 +95,7 @@ def prepare_prompt(
 ) -> PreparedPrompt:
     started_at = perf_counter()
     available_secret_keys = load_runtime_secrets(config)
-    attachment_info = collect_attachment_context(request)
+    attachment_info = collect_attachment_context(request, workspace)
     documents = collect_context_documents(workspace, config)
     repository_context = build_repository_context(documents, request, action)
     project_summary = build_project_summary(collect_project_summary(workspace), request, action)

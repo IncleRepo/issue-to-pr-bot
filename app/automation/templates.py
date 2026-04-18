@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from app.config import BotConfig, get_check_commands
 from app.domain.models import IssueRequest
 from app.output_artifacts import (
+    find_existing_output_artifact_path,
     get_commit_message_draft_path,
     get_pr_body_draft_path,
     get_pr_summary_draft_path,
@@ -163,8 +164,8 @@ def choose_commit_summary(request: IssueRequest, commit_type: str) -> str:
 
 
 def load_commit_message_draft(request: IssueRequest) -> str:
-    draft_path = get_commit_message_draft_path(request)
-    if not draft_path.exists() or not draft_path.is_file():
+    draft_path = find_existing_output_artifact_path("commit-message.txt", request)
+    if draft_path is None:
         return ""
     for line in draft_path.read_text(encoding="utf-8-sig").splitlines():
         stripped = line.strip()
@@ -308,6 +309,9 @@ def build_task_prompt(
             "- Do not push directly to main or any protected base branch.",
             "- Do not push branches, open pull requests, merge pull requests, or post GitHub comments yourself.",
             "- The wrapper will supervise remote publish and merge steps after your local work is done.",
+            "- Files under `.issue-to-pr-bot/input/` and `.issue-to-pr-bot/output/` are workspace-only scratch files.",
+            "- Never include those workspace-only files in commits, publishable diffs, or pull request changes.",
+            "- If you accidentally staged or committed those workspace-only files, remove them from the publishable commit history before exiting.",
             f"- Before exiting, write the final pull request title draft to `{pr_title_path}`.",
             f"- Before exiting, write the final pull request body draft to `{pr_body_path}`.",
             "- Create parent directories for those output files if they do not already exist.",

@@ -3,7 +3,6 @@ import io
 import runpy
 import tempfile
 import unittest
-from os import environ
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,9 +32,15 @@ from app.agent_runner import (
     run_console_update,
     stream_task_logs,
     try_resolve_log_path,
+    build_task_subprocess_command,
 )
 from app.agent.service import execute_task_in_workspace
-from app.output_artifacts import get_repository_output_root
+from app.output_artifacts import (
+    get_legacy_workspace_output_artifact_root,
+    get_workspace_input_root,
+    get_workspace_output_root,
+)
+from app.workspace_state import resolve_workspace_codex_home_root
 
 
 class AgentRunnerTest(unittest.TestCase):
@@ -270,25 +275,27 @@ class AgentRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = Path(temp_dir)
             repo_dir = workspace_root / "IncleRepo__example" / "issue-9"
-            repo_dir.mkdir(parents=True)
-            output_dir = repo_dir / "bot-output"
-            output_dir.mkdir()
+            repo_dir.joinpath(".git", "info").mkdir(parents=True)
+            output_dir = get_workspace_output_root(repo_dir)
+            output_dir.mkdir(parents=True)
             (output_dir / "pr-body.md").write_text("draft", encoding="utf-8")
-            runtime_root = workspace_root / ".runtime-output"
-            with patch.dict(environ, {"BOT_OUTPUT_ARTIFACT_ROOT": str(runtime_root)}, clear=False):
-                repo_artifact_root = get_repository_output_root(task.repository)
-                repo_artifact_root.mkdir(parents=True, exist_ok=True)
-                (repo_artifact_root / "stale.txt").write_text("draft", encoding="utf-8")
-                local_config = AgentConfig(
-                    control_plane_url=config.control_plane_url,
-                    agent_token=config.agent_token,
-                    workspace_root=workspace_root,
-                    log_path=config.log_path,
-                )
-                prepared = prepare_repository_workspace(local_config, task)
+            legacy_output_dir = get_legacy_workspace_output_artifact_root(repo_dir)
+            legacy_output_dir.mkdir(parents=True)
+            (legacy_output_dir / "pr-body.md").write_text("legacy", encoding="utf-8")
+            local_config = AgentConfig(
+                control_plane_url=config.control_plane_url,
+                agent_token=config.agent_token,
+                workspace_root=workspace_root,
+                log_path=config.log_path,
+            )
+            prepared = prepare_repository_workspace(local_config, task)
+            self.assertEqual(prepared, repo_dir)
+            self.assertFalse(output_dir.exists())
+            self.assertFalse(legacy_output_dir.exists())
+            exclude_text = repo_dir.joinpath(".git", "info", "exclude").read_text(encoding="utf-8")
+            self.assertIn("/.issue-to-pr-bot/input/", exclude_text)
+            self.assertIn("/.issue-to-pr-bot/output/", exclude_text)
 
-        self.assertEqual(prepared, repo_dir)
-        self.assertFalse(repo_artifact_root.exists())
         commands = [call.args[0] for call in mock_run_command.call_args_list]
         checkout_index = commands.index(["git", "-C", str(repo_dir), "checkout", "-B", "main", "FETCH_HEAD"])
         reset_index = commands.index(["git", "-C", str(repo_dir), "reset", "--hard"])
@@ -372,6 +379,29 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(startupinfo.dwFlags, 0x1)
         self.assertEqual(startupinfo.wShowWindow, 0)
         self.assertEqual(written_pid, "321")
+
+    @patch("app.agent.service.sys.frozen", True, create=True)
+    @patch("app.agent.service.sys.executable", r"C:\agent\issue-to-pr-bot-agent.exe")
+    def test_build_task_subprocess_command_uses_embedded_agent_binary_when_frozen(self) -> None:
+        command = build_task_subprocess_command(
+            Path(r"C:\agent\agent-config.json"),
+            Path(r"C:\agent\task.json"),
+            Path(r"C:\agent\task.log"),
+        )
+
+        self.assertEqual(
+            command,
+            [
+                r"C:\agent\issue-to-pr-bot-agent.exe",
+                "run-task",
+                "--config",
+                r"C:\agent\agent-config.json",
+                "--task-file",
+                r"C:\agent\task.json",
+                "--log-path",
+                r"C:\agent\task.log",
+            ],
+        )
 
     @patch("app.agent.service.print_running_tasks")
     def test_dispatch_console_command_supports_ps(self, mock_ps) -> None:
@@ -487,14 +517,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.1.0",
+                        "managed_runtime_version": "0.2.0",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.1.0")
+            mock_install.return_value = (staged_path, "updated", "0.2.0")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
@@ -601,7 +631,11 @@ class AgentRunnerTest(unittest.TestCase):
             execute_task_in_workspace(config, workspace, task)
 
         mock_invalidate_session.assert_called_once_with(workspace)
-        mock_rmtree.assert_called()
+        removed_paths = [call.args[0] for call in mock_rmtree.call_args_list]
+        self.assertIn(get_workspace_input_root(workspace), removed_paths)
+        self.assertIn(get_workspace_output_root(workspace), removed_paths)
+        self.assertIn(get_legacy_workspace_output_artifact_root(workspace), removed_paths)
+        self.assertIn(resolve_workspace_codex_home_root(workspace), removed_paths)
         mock_bot_main.assert_called_once()
 
 

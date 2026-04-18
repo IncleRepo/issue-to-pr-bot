@@ -34,7 +34,7 @@ class AttachmentsTest(unittest.TestCase):
                     comment_id=55,
                 )
 
-                context = collect_attachment_context(request)
+                context = collect_attachment_context(request, root)
                 formatted = format_attachment_context(context)
             finally:
                 server.shutdown()
@@ -43,6 +43,10 @@ class AttachmentsTest(unittest.TestCase):
         self.assertEqual(len(context.attachments), 1)
         self.assertEqual(context.attachments[0].kind, "text")
         self.assertIn("# Guide", context.attachments[0].content)
+        self.assertEqual(
+            Path(context.attachments[0].local_path),
+            root / ".issue-to-pr-bot" / "input" / "attachments" / "comment-55" / "guide.md",
+        )
         self.assertIn("guide.md", formatted)
         self.assertIn("saved at:", formatted)
         self.assertEqual(context.skipped, [])
@@ -66,7 +70,7 @@ class AttachmentsTest(unittest.TestCase):
                     comment_id=56,
                 )
 
-                context = collect_attachment_context(request)
+                context = collect_attachment_context(request, root)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -86,7 +90,8 @@ class AttachmentsTest(unittest.TestCase):
             comment_id=57,
         )
 
-        context = collect_attachment_context(request)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            context = collect_attachment_context(request, Path(temp_dir))
 
         self.assertEqual(context.attachments, [])
         self.assertEqual(len(context.skipped), 1)

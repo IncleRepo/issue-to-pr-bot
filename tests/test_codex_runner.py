@@ -426,6 +426,85 @@ class CodexRunnerTest(unittest.TestCase):
         self.assertIn("without creating the required local commit", retry_prompt.prompt)
         self.assertEqual(publish_mock.call_count, 2)
 
+    def test_create_codex_pr_retries_once_when_publish_diff_contains_workspace_only_files(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/sample-repo",
+            issue_number=29,
+            issue_title="Keep workspace scratch files out of PR",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 구현해줘",
+            comment_author="IncleRepo",
+            comment_id=402,
+        )
+        prepared_prompt = PreparedPrompt(
+            prompt="original prompt",
+            attachment_info=AttachmentContext(attachments=[], skipped=[]),
+            available_secret_keys=[],
+            repository_context="repo",
+            project_summary="summary",
+            code_context="code",
+            attachment_context="attachments",
+            metrics=PromptMetrics(
+                action="run",
+                prompt_chars=10,
+                document_count=1,
+                selected_document_count=1,
+                repository_context_chars=4,
+                project_summary_chars=7,
+                code_context_chars=4,
+                code_context_file_count=1,
+                attachment_context_chars=11,
+                attachment_count=0,
+                skipped_attachment_count=0,
+                secret_key_count=0,
+                collection_seconds=0.01,
+            ),
+        )
+
+        with (
+            patch(
+                "app.codex_runner.checkout_request_target",
+                return_value=CheckoutTarget(branch_name="feat/29-feature", base_branch="main"),
+            ),
+            patch("app.codex_runner.run_codex") as run_codex_mock,
+            patch("app.codex_runner.resolve_verification_plan") as verification_plan_mock,
+            patch(
+                "app.codex_runner.commit_push_and_open_pr",
+                side_effect=[
+                    RuntimeError(
+                        "Non-publishable workspace files are present in the publishable diff.\n"
+                        "Remove these workspace-only files from the publishable commit history before the wrapper pushes:\n"
+                        "- .issue-to-pr-bot/output/pr-body.md"
+                    ),
+                    PullRequestResult(
+                        branch_name="feat/29-feature",
+                        pull_request_url="https://example.com/pr/29",
+                        created=True,
+                        changed_files=["src/main.js"],
+                    ),
+                ],
+            ) as publish_mock,
+        ):
+            verification_plan_mock.return_value = type(
+                "Plan",
+                (),
+                {"commands": [], "profile": "default", "changed_files": []},
+            )()
+            result = create_codex_pr(
+                request,
+                Path("."),
+                BotConfig(default_base_branch="main"),
+                runtime_options=BotRuntimeOptions(mode="codex", provider="codex", verify=True),
+                prepared_prompt=prepared_prompt,
+            )
+
+        self.assertEqual(result.branch_name, "feat/29-feature")
+        self.assertEqual(run_codex_mock.call_count, 2)
+        retry_prompt = run_codex_mock.call_args_list[1].args[5]
+        self.assertIn("Workspace-only scratch files were found in the publishable diff", retry_prompt.prompt)
+        self.assertIn(".issue-to-pr-bot/output/pr-body.md", retry_prompt.prompt)
+        self.assertEqual(publish_mock.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

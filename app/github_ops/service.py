@@ -21,12 +21,12 @@ from app.bot import (
 from app.config import BOT_MENTION, BotConfig, bot_slug_from_mention, get_check_commands, load_config
 from app.domain.models import MetadataPlan
 from app.metadata_rules import infer_issue_metadata, infer_pull_request_metadata
-from app.output_artifacts import get_pr_body_draft_path, get_pr_summary_draft_path
-from app.output_artifacts import get_pr_title_draft_path, is_non_publishable_workspace_path
+from app.output_artifacts import find_existing_output_artifact_path, is_non_publishable_workspace_path
 from app.workspace_state import invalidate_codex_session, mark_workspace_linked_pull_request
 
 BOT_PR_MARKER = "<!-- incle-issue-to-pr-bot -->"
 BOT_AUTO_MERGE_MARKER = "<!-- incle-issue-to-pr-bot:auto-merge -->"
+NON_PUBLISHABLE_WORKSPACE_CHANGES_ERROR_PREFIX = "Non-publishable workspace files are present in the publishable diff."
 
 
 def build_hidden_windows_subprocess_kwargs() -> dict[str, object]:
@@ -471,10 +471,14 @@ def commit_push_and_open_pr(
                 changed_files=[],
                 verification_commands=verification_commands or [],
             )
-        changed_files = get_branch_changed_files(workspace, base_branch)
+        raw_changed_files = get_raw_branch_changed_files(workspace, base_branch)
+        ensure_no_non_publishable_workspace_changes(raw_changed_files, config.output_dir)
+        changed_files = filter_output_artifact_paths(raw_changed_files, config.output_dir)
         ensure_no_protected_changes(changed_files, config)
     else:
-        changed_files = get_staged_files(workspace)
+        raw_staged_files = get_staged_files(workspace)
+        ensure_no_non_publishable_workspace_changes(raw_staged_files, config.output_dir)
+        changed_files = filter_output_artifact_paths(raw_staged_files, config.output_dir)
         ensure_no_protected_changes(changed_files, config)
         if not commit_message:
             invalidate_codex_session(workspace)
@@ -779,6 +783,12 @@ def get_workspace_changed_files(workspace: Path) -> list[str]:
 
 
 def get_branch_changed_files(workspace: Path, base_branch: str) -> list[str]:
+    changed_files = get_raw_branch_changed_files(workspace, base_branch)
+    config = load_config(workspace)
+    return filter_output_artifact_paths(changed_files, config.output_dir)
+
+
+def get_raw_branch_changed_files(workspace: Path, base_branch: str) -> list[str]:
     result = subprocess.run(
         [
             "git",
@@ -801,9 +811,7 @@ def get_branch_changed_files(workspace: Path, base_branch: str) -> list[str]:
     )
     if result.returncode != 0:
         raise RuntimeError(f"브랜치 변경 파일 확인 실패: {(result.stdout or '').strip()}")
-    changed_files = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-    config = load_config(workspace)
-    return filter_output_artifact_paths(changed_files, config.output_dir)
+    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 
 
 def unstage_output_artifacts(workspace: Path, output_dir: str) -> None:
@@ -819,6 +827,7 @@ def unstage_output_artifacts(workspace: Path, output_dir: str) -> None:
             "HEAD",
             "--",
             output_dir,
+            ".issue-to-pr-bot",
             ".runtime-output",
             "Microsoft/Windows/PowerShell/ModuleAnalysisCache",
         ],
@@ -838,6 +847,23 @@ def unstage_output_artifacts(workspace: Path, output_dir: str) -> None:
 def filter_output_artifact_paths(paths: list[str], output_dir: str) -> list[str]:
     normalized_output_dir = normalize_output_dir(output_dir)
     return [path for path in paths if not is_non_publishable_workspace_path(path, normalized_output_dir)]
+
+
+def get_non_publishable_workspace_paths(paths: list[str], output_dir: str) -> list[str]:
+    normalized_output_dir = normalize_output_dir(output_dir)
+    return [path for path in paths if is_non_publishable_workspace_path(path, normalized_output_dir)]
+
+
+def ensure_no_non_publishable_workspace_changes(paths: list[str], output_dir: str) -> None:
+    blocked = get_non_publishable_workspace_paths(paths, output_dir)
+    if not blocked:
+        return
+    blocked_text = "\n".join(f"- {path}" for path in blocked)
+    raise RuntimeError(
+        f"{NON_PUBLISHABLE_WORKSPACE_CHANGES_ERROR_PREFIX}\n"
+        "Remove these workspace-only files from the publishable commit history before the wrapper pushes:\n"
+        f"{blocked_text}"
+    )
 
 
 def is_output_artifact_path(path: str, output_dir: str) -> bool:
@@ -1218,22 +1244,22 @@ def build_default_pull_request_body(
 
 
 def load_pull_request_body_draft(request: IssueRequest, _workspace: Path, _config: BotConfig) -> str:
-    body_path = get_pr_body_draft_path(request)
-    if body_path.exists() and body_path.is_file():
+    body_path = find_existing_output_artifact_path("pr-body.md", request, _workspace)
+    if body_path is not None:
         return body_path.read_text(encoding="utf-8-sig").strip()
     return ""
 
 
 def load_pull_request_summary(request: IssueRequest, _workspace: Path, _config: BotConfig) -> str:
-    summary_path = get_pr_summary_draft_path(request)
-    if summary_path.exists() and summary_path.is_file():
+    summary_path = find_existing_output_artifact_path("pr-summary.md", request, _workspace)
+    if summary_path is not None:
         return summary_path.read_text(encoding="utf-8-sig").strip()
     return ""
 
 
 def load_pull_request_title_draft(request: IssueRequest, _workspace: Path, _config: BotConfig) -> str:
-    title_path = get_pr_title_draft_path(request)
-    if title_path.exists() and title_path.is_file():
+    title_path = find_existing_output_artifact_path("pr-title.txt", request, _workspace)
+    if title_path is not None:
         for line in title_path.read_text(encoding="utf-8-sig").splitlines():
             stripped = line.strip()
             if stripped:
@@ -1464,4 +1490,3 @@ def run_git(args: list[str], workspace: Path, mask: str | None = None) -> None:
         if not detail:
             detail = "(git output 없음)"
         raise RuntimeError(f"Git 명령 실패({result.returncode}): {display_command}\n{detail}")
-

@@ -27,9 +27,12 @@ from app import main as bot_main
 from app.automation.parsing import build_issue_request, parse_bot_command
 from app.codex_provider import interrupt_active_codex_process
 from app.output_artifacts import (
-    OUTPUT_ARTIFACT_ROOT_ENV,
+    BOT_WORKSPACE_ROOT_ENV,
     ensure_task_output_root,
+    get_workspace_input_root,
     get_workspace_output_artifact_root,
+    get_workspace_output_root,
+    get_legacy_workspace_output_artifact_root,
 )
 from app.release_channel import install_standalone_binary, is_newer_version
 from app.runtime.comments import configure_output_encoding, post_interrupted_comment
@@ -341,7 +344,7 @@ def start_agent_process(config_path: Path) -> int:
     if running_pid:
         log_message(config, f"agent가 이미 실행 중입니다. PID={running_pid}")
         return 0
-    executable = resolve_background_python()
+    command = build_agent_process_command(config_path)
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
@@ -349,7 +352,7 @@ def start_agent_process(config_path: Path) -> int:
         raise RuntimeError("agent log_path가 설정되어 있지 않습니다.")
     config.log_path.parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.open("a", encoding="utf-8") as handle:
-        subprocess.Popen([str(executable), "-m", "app.agent_runner", "--config", str(config_path)], cwd=str(REPOSITORY_ROOT), stdout=handle, stderr=handle, stdin=subprocess.DEVNULL, creationflags=creationflags, close_fds=True)
+        subprocess.Popen(command, cwd=str(REPOSITORY_ROOT), stdout=handle, stderr=handle, stdin=subprocess.DEVNULL, creationflags=creationflags, close_fds=True)
     time.sleep(2)
     running_pid = read_running_pid(config_path)
     if not running_pid:
@@ -643,13 +646,33 @@ def prepare_repository_workspace(config: AgentConfig, task: ClaimedTask, *, log_
     run_command(["git", "-C", str(target), "checkout", "-B", task.default_branch, "FETCH_HEAD"], config, log_path=log_path)
     run_command(["git", "-C", str(target), "reset", "--hard", "FETCH_HEAD"], config, log_path=log_path)
     run_command(["git", "-C", str(target), "clean", "-fd"], config, log_path=log_path)
+    ensure_workspace_local_git_exclude(target)
     cleanup_workspace_output_artifacts(target, task.repository)
     return target
 
 
 def cleanup_workspace_output_artifacts(workspace: Path, repository: str) -> None:
-    # Codex 산출물은 workspace 안 경로만 정리한다.
+    del repository
     shutil.rmtree(get_workspace_output_artifact_root(workspace), ignore_errors=True)
+    shutil.rmtree(get_legacy_workspace_output_artifact_root(workspace), ignore_errors=True)
+
+
+def ensure_workspace_local_git_exclude(workspace: Path) -> None:
+    exclude_path = workspace / ".git" / "info" / "exclude"
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude_path.read_text(encoding="utf-8", errors="replace") if exclude_path.exists() else ""
+    required_lines = [
+        "# issue-to-pr-bot local workspace files",
+        "/.issue-to-pr-bot/input/",
+        "/.issue-to-pr-bot/output/",
+        "/.runtime-output/",
+    ]
+    missing = [line for line in required_lines if line not in existing.splitlines()]
+    if not missing:
+        return
+    prefix = "\n" if existing and not existing.endswith("\n") else ""
+    suffix = "\n" if missing else ""
+    exclude_path.write_text(existing + prefix + "\n".join(missing) + suffix, encoding="utf-8")
 
 
 def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: ClaimedTask, *, log_path: Path | None = None) -> None:
@@ -658,7 +681,6 @@ def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: Claime
         event_path.write_text(json.dumps(task.payload, ensure_ascii=False), encoding="utf-8")
         request = build_issue_request(task.payload)
         command = parse_bot_command(request.comment_body)
-        output_root = get_workspace_output_artifact_root(workspace)
         env_updates = {
             "BOT_CREATE_PR": "1",
             "GITHUB_EVENT_PATH": str(event_path),
@@ -667,14 +689,14 @@ def execute_task_in_workspace(config: AgentConfig, workspace: Path, task: Claime
             "GITHUB_TOKEN": task.github_token,
             "BOT_GITHUB_TOKEN": task.github_token,
             "BOT_RESET_WORKTREE": "1",
-            OUTPUT_ARTIFACT_ROOT_ENV: str(output_root),
+            BOT_WORKSPACE_ROOT_ENV: str(workspace),
         }
         log_message(config, f"작업 실행: {workspace}", log_path=log_path)
         with temporary_env(env_updates), change_directory(workspace):
             try:
                 if command and command.options.get("fresh_workspace") == "true":
                     reset_workspace_runtime_for_fresh_run(workspace, config, log_path=log_path)
-                ensure_task_output_root(request)
+                ensure_task_output_root(request, workspace)
                 bot_main.main()
                 touch_workspace_metadata(workspace)
             except KeyboardInterrupt as error:
@@ -691,6 +713,9 @@ def reset_workspace_runtime_for_fresh_run(
 ) -> None:
     log_message(config, "fresh 요청을 감지해 기존 Codex 세션과 런타임 상태를 정리합니다.", log_path=log_path)
     invalidate_codex_session(workspace)
+    shutil.rmtree(get_workspace_input_root(workspace), ignore_errors=True)
+    shutil.rmtree(get_workspace_output_root(workspace), ignore_errors=True)
+    shutil.rmtree(get_legacy_workspace_output_artifact_root(workspace), ignore_errors=True)
     shutil.rmtree(resolve_workspace_codex_home_root(workspace), ignore_errors=True)
 
 
@@ -829,6 +854,10 @@ def clear_runtime_state(config_path: Path) -> None:
     resolve_state_path(config_path).unlink(missing_ok=True)
 
 
+def is_frozen_runtime() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
 def resolve_background_python() -> Path:
     return Path(sys.executable)
 
@@ -839,6 +868,38 @@ def resolve_task_python() -> Path:
         return executable
     pythonw = executable.with_name("pythonw.exe")
     return pythonw if pythonw.exists() else executable
+
+
+def build_agent_process_command(config_path: Path) -> list[str]:
+    if is_frozen_runtime():
+        return [str(Path(sys.executable)), "--config", str(config_path)]
+    return [str(resolve_background_python()), "-m", "app.agent_runner", "--config", str(config_path)]
+
+
+def build_task_subprocess_command(config_path: Path, task_file: Path, log_path: Path) -> list[str]:
+    if is_frozen_runtime():
+        return [
+            str(Path(sys.executable)),
+            "run-task",
+            "--config",
+            str(config_path),
+            "--task-file",
+            str(task_file),
+            "--log-path",
+            str(log_path),
+        ]
+    return [
+        str(resolve_task_python()),
+        "-m",
+        "app.agent_runner",
+        "run-task",
+        "--config",
+        str(config_path),
+        "--task-file",
+        str(task_file),
+        "--log-path",
+        str(log_path),
+    ]
 
 
 def try_resolve_log_path(config_path: Path) -> Path | None:
@@ -988,18 +1049,7 @@ def run_task_subprocess(config_path: Path, task_file: Path, log_path: Path, pid_
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0
         process = subprocess.Popen(
-            [
-                str(resolve_task_python()),
-                "-m",
-                "app.agent_runner",
-                "run-task",
-                "--config",
-                str(config_path),
-                "--task-file",
-                str(task_file),
-                "--log-path",
-                str(log_path),
-            ],
+            build_task_subprocess_command(config_path, task_file, log_path),
             cwd=str(REPOSITORY_ROOT),
             stdout=handle,
             stderr=handle,

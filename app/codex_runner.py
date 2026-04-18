@@ -42,29 +42,30 @@ def create_codex_pr(
             run_verification(config, workspace, commands=verification_commands)
         else:
             print("Codex run produced no workspace changes, so verification is skipped.")
-    try:
-        return commit_push_and_open_pr(
-            request=request,
-            workspace=workspace,
-            config=config,
-            branch_name=target.branch_name,
-            base_branch=target.base_branch,
-            verification_commands=verification_commands,
-        )
-    except RuntimeError as error:
-        if not is_missing_local_commit_error(error):
-            raise
-        print("Codex가 로컬 변경 후 커밋 없이 종료해, 커밋만 보강하도록 한 번 더 요청합니다.")
-        follow_up_prompt = build_missing_commit_follow_up_prompt(primary_prompt)
-        run_codex(request, workspace, config, command, runtime_options, follow_up_prompt)
-        return commit_push_and_open_pr(
-            request=request,
-            workspace=workspace,
-            config=config,
-            branch_name=target.branch_name,
-            base_branch=target.base_branch,
-            verification_commands=verification_commands,
-        )
+
+    follow_up_prompt = primary_prompt
+    attempted_recoveries: set[str] = set()
+    while True:
+        try:
+            return commit_push_and_open_pr(
+                request=request,
+                workspace=workspace,
+                config=config,
+                branch_name=target.branch_name,
+                base_branch=target.base_branch,
+                verification_commands=verification_commands,
+            )
+        except RuntimeError as error:
+            recovery_kind = classify_publish_recovery_error(error)
+            if recovery_kind is None or recovery_kind in attempted_recoveries:
+                raise
+            attempted_recoveries.add(recovery_kind)
+            follow_up_prompt = build_publish_recovery_follow_up_prompt(follow_up_prompt, error)
+            if recovery_kind == "missing_local_commit":
+                print("Codex가 로컬 변경 후 커밋 없이 종료해, 커밋만 보강하도록 한 번 더 요청합니다.")
+            else:
+                print("Publish 대상에 작업용 파일이 포함되어 있어, Codex에게 정리 후 다시 종료하도록 한 번 더 요청합니다.")
+            run_codex(request, workspace, config, command, runtime_options, follow_up_prompt)
 
 
 def run_codex(
@@ -101,6 +102,18 @@ def is_missing_local_commit_error(error: Exception) -> bool:
     return "Codex finished with local changes but no local commit." in str(error)
 
 
+def is_non_publishable_workspace_changes_error(error: Exception) -> bool:
+    return "Non-publishable workspace files are present in the publishable diff." in str(error)
+
+
+def classify_publish_recovery_error(error: Exception) -> str | None:
+    if is_missing_local_commit_error(error):
+        return "missing_local_commit"
+    if is_non_publishable_workspace_changes_error(error):
+        return "non_publishable_workspace_changes"
+    return None
+
+
 def build_missing_commit_follow_up_prompt(prepared_prompt: PreparedPrompt) -> PreparedPrompt:
     follow_up = "\n".join(
         [
@@ -124,6 +137,48 @@ def build_missing_commit_follow_up_prompt(prepared_prompt: PreparedPrompt) -> Pr
         attachment_context=prepared_prompt.attachment_context,
         metrics=prepared_prompt.metrics,
     )
+
+
+def build_non_publishable_workspace_changes_follow_up_prompt(
+    prepared_prompt: PreparedPrompt,
+    error: Exception,
+) -> PreparedPrompt:
+    follow_up = "\n".join(
+        [
+            prepared_prompt.prompt,
+            "",
+            "Follow-up wrapper instruction:",
+            "- Workspace-only scratch files were found in the publishable diff.",
+            "- Do not restart the task from scratch.",
+            "- Remove every `.issue-to-pr-bot/input/**`, `.issue-to-pr-bot/output/**`, and legacy `.runtime-output/**` file from staged changes and from the publishable commit history before exiting.",
+            "- Amend or replace the local commit if needed so those files are not part of the branch diff anymore.",
+            "- Do not remove the files from disk if they are still needed as local scratch files; just make sure they are not tracked in the publishable diff.",
+            "- Do not push, open a PR, merge, or perform any extra GitHub workflow steps yourself.",
+            "- Wrapper validation failed with this detail:",
+            str(error),
+        ]
+    )
+    return PreparedPrompt(
+        prompt=follow_up,
+        attachment_info=prepared_prompt.attachment_info,
+        available_secret_keys=prepared_prompt.available_secret_keys,
+        repository_context=prepared_prompt.repository_context,
+        project_summary=prepared_prompt.project_summary,
+        code_context=prepared_prompt.code_context,
+        attachment_context=prepared_prompt.attachment_context,
+        metrics=prepared_prompt.metrics,
+    )
+
+
+def build_publish_recovery_follow_up_prompt(
+    prepared_prompt: PreparedPrompt,
+    error: Exception,
+) -> PreparedPrompt:
+    if is_missing_local_commit_error(error):
+        return build_missing_commit_follow_up_prompt(prepared_prompt)
+    if is_non_publishable_workspace_changes_error(error):
+        return build_non_publishable_workspace_changes_follow_up_prompt(prepared_prompt, error)
+    raise ValueError(f"Unsupported publish recovery error: {error}")
 
 
 def should_rerun_codex_after_sync(sync_result: BaseSyncResult) -> bool:
