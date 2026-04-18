@@ -14,11 +14,13 @@ from app.agent_runner import (
     build_parser,
     cancel_running_task,
     clear_pid_file,
+    collect_runtime_update_wait_pids,
     dispatch_console_command,
     extract_issue_number,
     extract_pull_request_number,
     fetch_central_agent_config,
     handle_console_logs_command,
+    install_latest_agent_runtime,
     merge_agent_config,
     prepare_repository_workspace,
     read_running_pid,
@@ -561,19 +563,86 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.2",
+                        "managed_runtime_version": "0.3.3",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.2")
+            mock_install.return_value = (staged_path, "updated", "0.3.3")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
 
         self.assertIn("이미 최신 버전입니다", stdout.getvalue())
+
+    @patch("app.agent.service.spawn_runtime_replacement_helper")
+    @patch("app.agent.service.install_standalone_binary")
+    def test_install_latest_agent_runtime_schedules_replacement_when_newer_version_exists(
+        self,
+        mock_install,
+        mock_spawn_helper,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            runtime_path = Path(temp_dir) / "bin" / "issue-to-pr-bot-agent"
+            runtime_path.parent.mkdir(parents=True)
+            runtime_path.write_text("binary", encoding="utf-8")
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "control_plane_url": "https://example.com",
+                        "agent_token": "token",
+                        "workspace_root": str(Path(temp_dir) / "work"),
+                        "log_path": str(Path(temp_dir) / "agent.log"),
+                        "managed_runtime_path": str(runtime_path),
+                        "managed_runtime_version": "0.3.1",
+                        "release_repository": "IncleRepo/issue-to-pr-bot",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent"
+            staged_path.write_text("new-binary", encoding="utf-8")
+            mock_install.return_value = (staged_path, "updated", "0.3.3")
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=Path(temp_dir) / "work",
+                log_path=Path(temp_dir) / "agent.log",
+                managed_runtime_path=runtime_path,
+                managed_runtime_version="0.3.1",
+                release_repository="IncleRepo/issue-to-pr-bot",
+            )
+
+            message = install_latest_agent_runtime(config, config_path)
+
+        self.assertIn("업데이트를 예약했습니다: 0.3.3", message)
+        mock_spawn_helper.assert_called_once_with(staged_path, runtime_path, config_path)
+
+    def test_collect_runtime_update_wait_pids_includes_running_task_pids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            state_path = config_path.with_suffix(".state.json")
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "running": [
+                            {"task_id": "task-a", "pid": 1234},
+                            {"task_id": "task-b", "pid": "4567"},
+                            {"task_id": "task-c", "pid": "invalid"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            pids = collect_runtime_update_wait_pids(config_path)
+
+        self.assertIn(1234, pids)
+        self.assertIn(4567, pids)
+        self.assertTrue(any(pid > 0 for pid in pids))
 
     def test_resolve_requested_log_path_accepts_task_id_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

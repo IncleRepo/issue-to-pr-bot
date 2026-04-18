@@ -140,7 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return replace_runtime_binary(
                 source=Path(args.source),
                 target=Path(args.target),
-                wait_pid=int(args.wait_pid),
+                wait_pids=[int(raw) for raw in args.wait_pid],
                 config_path=Path(args.config),
             )
 
@@ -173,7 +173,7 @@ def build_parser(*, include_internal: bool) -> argparse.ArgumentParser:
         replace_runtime = subparsers.add_parser("replace-runtime", help=argparse.SUPPRESS)
         replace_runtime.add_argument("--source", required=True)
         replace_runtime.add_argument("--target", required=True)
-        replace_runtime.add_argument("--wait-pid", required=True)
+        replace_runtime.add_argument("--wait-pid", action="append", required=True)
         replace_runtime.add_argument("--config", required=True)
     else:
         parser.set_defaults(command="serve")
@@ -545,18 +545,10 @@ def install_latest_agent_runtime(config: AgentConfig, config_path: Path) -> str:
         target_path.unlink(missing_ok=True)
         return f"이미 최신 버전입니다: {config.managed_runtime_version or APP_VERSION}"
 
-    if os.name != "nt":
-        shutil.copy2(target_path, runtime_path)
-        current_mode = runtime_path.stat().st_mode
-        runtime_path.chmod(current_mode | 0o111)
-        target_path.unlink(missing_ok=True)
-        update_agent_config_runtime_metadata(config_path, runtime_path, target_version)
-        return f"agent를 업데이트했습니다: {target_version}"
-
     spawn_runtime_replacement_helper(target_path, runtime_path, config_path)
     return (
         f"업데이트를 예약했습니다: {target_version}. "
-        "현재 콘솔을 종료하면 새 agent가 교체된 뒤 자동으로 다시 시작됩니다."
+        "현재 콘솔이 종료되고 실행 중 task가 끝나면 새 agent가 교체된 뒤 자동으로 다시 시작됩니다."
     )
 
 
@@ -1384,6 +1376,7 @@ def update_agent_config_runtime_metadata(config_path: Path, runtime_path: Path, 
 def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Path) -> None:
     creationflags = 0
     startupinfo = None
+    start_new_session = False
     if os.name == "nt":
         creationflags = (
             subprocess.CREATE_NEW_PROCESS_GROUP
@@ -1393,33 +1386,53 @@ def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Pa
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
+    else:
+        start_new_session = True
+    command = [
+        str(source),
+        "replace-runtime",
+        "--source",
+        str(source),
+        "--target",
+        str(target),
+    ]
+    for wait_pid in collect_runtime_update_wait_pids(config_path):
+        command.extend(["--wait-pid", str(wait_pid)])
+    command.extend([
+        "--config",
+        str(config_path),
+    ])
     subprocess.Popen(
-        [
-            str(source),
-            "replace-runtime",
-            "--source",
-            str(source),
-            "--target",
-            str(target),
-            "--wait-pid",
-            str(os.getpid()),
-            "--config",
-            str(config_path),
-        ],
+        command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
         startupinfo=startupinfo,
+        start_new_session=start_new_session,
         close_fds=True,
     )
 
 
-def replace_runtime_binary(source: Path, target: Path, *, wait_pid: int, config_path: Path) -> int:
+def collect_runtime_update_wait_pids(config_path: Path) -> list[int]:
+    wait_pids = {os.getpid()}
+    for entry in get_running_entries(config_path):
+        raw_pid = entry.get("pid")
+        try:
+            pid = int(raw_pid)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0:
+            wait_pids.add(pid)
+    return sorted(wait_pids)
+
+
+def replace_runtime_binary(source: Path, target: Path, *, wait_pids: Sequence[int], config_path: Path) -> int:
     deadline = time.time() + 120
-    while time.time() < deadline and is_process_running(wait_pid):
+    pending = {pid for pid in wait_pids if pid > 0}
+    while time.time() < deadline and any(is_process_running(pid) for pid in pending):
         time.sleep(0.5)
-    if is_process_running(wait_pid):
+    if any(is_process_running(pid) for pid in pending):
         return 1
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1431,6 +1444,7 @@ def replace_runtime_binary(source: Path, target: Path, *, wait_pid: int, config_
 
     creationflags = 0
     startupinfo = None
+    start_new_session = False
     if os.name == "nt":
         creationflags = (
             subprocess.CREATE_NEW_PROCESS_GROUP
@@ -1440,6 +1454,8 @@ def replace_runtime_binary(source: Path, target: Path, *, wait_pid: int, config_
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
+    else:
+        start_new_session = True
 
     subprocess.Popen(
         [str(target), "--config", str(config_path)],
@@ -1448,6 +1464,7 @@ def replace_runtime_binary(source: Path, target: Path, *, wait_pid: int, config_
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
         startupinfo=startupinfo,
+        start_new_session=start_new_session,
         close_fds=True,
     )
     return 0
