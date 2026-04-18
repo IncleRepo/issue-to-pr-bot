@@ -173,7 +173,7 @@ function shouldEnqueue(eventName, payload, env) {
   const mention = (env.BOT_MENTION || "").trim();
   const action = String(payload?.action || "").toLowerCase();
   const association = payload?.comment?.author_association || payload?.review?.author_association || "";
-  const allowedAssociation = ["OWNER", "MEMBER", "COLLABORATOR"].includes(association);
+  const allowedAssociation = isAllowedTriggerAssociation(association);
   if (!mention) {
     return false;
   }
@@ -205,6 +205,19 @@ function shouldEnqueue(eventName, payload, env) {
     return state === "success" && branches.length > 0;
   }
   return false;
+}
+
+function isAllowedTriggerAssociation(association) {
+  const normalized = String(association || "").toUpperCase();
+  return [
+    "OWNER",
+    "MEMBER",
+    "COLLABORATOR",
+    "CONTRIBUTOR",
+    "FIRST_TIMER",
+    "FIRST_TIME_CONTRIBUTOR",
+    "NONE",
+  ].includes(normalized);
 }
 
 function buildDuplicateKeys(eventName, deliveryId, payload) {
