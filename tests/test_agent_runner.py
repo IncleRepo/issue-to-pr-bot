@@ -3,7 +3,7 @@ import io
 import runpy
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, WindowsPath
 from unittest.mock import patch
 
 from app.agent_runner import (
@@ -563,14 +563,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.4",
+                        "managed_runtime_version": "0.3.5",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.4")
+            mock_install.return_value = (staged_path, "updated", "0.3.5")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
@@ -605,7 +605,7 @@ class AgentRunnerTest(unittest.TestCase):
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent"
             staged_path.write_text("new-binary", encoding="utf-8")
-            mock_install.return_value = (staged_path, "updated", "0.3.4")
+            mock_install.return_value = (staged_path, "updated", "0.3.5")
             config = AgentConfig(
                 control_plane_url="https://example.com",
                 agent_token="token",
@@ -618,7 +618,7 @@ class AgentRunnerTest(unittest.TestCase):
 
             message = install_latest_agent_runtime(config, config_path)
 
-        self.assertIn("업데이트를 예약했습니다: 0.3.4", message)
+        self.assertIn("업데이트를 예약했습니다: 0.3.5", message)
         mock_spawn_helper.assert_called_once_with(staged_path, runtime_path, config_path)
 
     def test_collect_runtime_update_wait_pids_includes_running_task_pids(self) -> None:
@@ -643,6 +643,24 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertIn(1234, pids)
         self.assertIn(4567, pids)
         self.assertTrue(any(pid > 0 for pid in pids))
+
+    @patch("app.agent.service.os.getpid", return_value=2222)
+    @patch("app.agent.service.os.getppid", return_value=1111)
+    @patch("app.agent.service.os.name", "posix")
+    def test_collect_runtime_update_wait_pids_includes_parent_pid_on_posix(
+        self,
+        _mock_getppid,
+        _mock_getpid,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = WindowsPath(temp_dir) / "agent-config.json"
+            state_path = config_path.with_suffix(".state.json")
+            state_path.write_text(json.dumps({"running": []}), encoding="utf-8")
+
+            pids = collect_runtime_update_wait_pids(config_path)
+
+        self.assertIn(1111, pids)
+        self.assertIn(2222, pids)
 
     def test_resolve_requested_log_path_accepts_task_id_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

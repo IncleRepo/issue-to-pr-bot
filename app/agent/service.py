@@ -1418,6 +1418,10 @@ def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Pa
 
 def collect_runtime_update_wait_pids(config_path: Path) -> list[int]:
     wait_pids = {os.getpid()}
+    if os.name != "nt":
+        parent_pid = os.getppid()
+        if parent_pid > 1:
+            wait_pids.add(parent_pid)
     for entry in get_running_entries(config_path):
         raw_pid = entry.get("pid")
         try:
