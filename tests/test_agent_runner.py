@@ -529,6 +529,23 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.", stdout.getvalue())
 
+    @patch("app.agent.service.should_stop_log_stream")
+    def test_stream_task_logs_follow_ignores_ctrl_c_until_q_request(self, mock_stop) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            tasks_root = config_path.parent / "tasks"
+            tasks_root.mkdir(parents=True)
+            log_path = tasks_root / "task-1.log"
+            log_path.write_text("line-1\n", encoding="utf-8")
+            mock_stop.side_effect = [KeyboardInterrupt(), True]
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                result = stream_task_logs(config_path, task_id="task-1", latest=False, follow=True)
+
+        self.assertEqual(result, 0)
+        self.assertIn("Ctrl+C는 비활성화되어 있습니다. 로그 스트리밍 종료는 q를 사용하세요.", stdout.getvalue())
+        self.assertIn("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.", stdout.getvalue())
+
     @patch("app.agent.service.install_standalone_binary")
     def test_run_console_update_reports_latest_version(self, mock_install) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -544,14 +561,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.1",
+                        "managed_runtime_version": "0.3.2",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.1")
+            mock_install.return_value = (staged_path, "updated", "0.3.2")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)

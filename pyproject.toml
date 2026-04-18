@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "issue-to-pr-bot-manager"
-version = "0.3.1"
+version = "0.3.2"
 description = "Centralized installer and operations manager for issue-to-pr-bot target repositories."
 readme = "README.md"
 requires-python = ">=3.11"

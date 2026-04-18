@@ -48,6 +48,7 @@ DEFAULT_MAX_CONCURRENCY = 2
 EXECUTOR_THREAD_CAP = 8
 WORKSPACE_GC_INTERVAL_SECONDS = 1800
 INTERACTIVE_CONSOLE_MODE = False
+ACTIVE_LOG_STREAM_POSIX_FD: int | None = None
 
 if os.name == "nt":
     import msvcrt
@@ -1168,22 +1169,59 @@ def stream_task_logs(config_path: Path, *, task_id: str | None, latest: bool, fo
     if not follow:
         print(log_path.read_text(encoding="utf-8", errors="replace"))
         return 0
-    try:
+    with ignore_sigint_during_log_stream(), prepare_log_stream_input_mode():
         with log_path.open("r", encoding="utf-8", errors="replace") as handle:
             while True:
-                if should_stop_log_stream():
+                try:
+                    if should_stop_log_stream():
+                        print()
+                        print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
+                        return 0
+                    line = handle.readline()
+                    if line:
+                        print(line, end="")
+                        continue
+                    time.sleep(0.2)
+                except KeyboardInterrupt:
                     print()
-                    print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
-                    return 0
-                line = handle.readline()
-                if line:
-                    print(line, end="")
-                    continue
-                time.sleep(0.2)
-    except KeyboardInterrupt:
-        print()
-        print("로그 스트리밍을 종료하고 agent 프롬프트로 돌아갑니다.")
-        return 0
+                    print("Ctrl+C는 비활성화되어 있습니다. 로그 스트리밍 종료는 q를 사용하세요.")
+
+
+@contextmanager
+def ignore_sigint_during_log_stream():
+    previous_handler = None
+    can_restore = False
+    if threading.current_thread() is threading.main_thread():
+        try:
+            previous_handler = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            can_restore = True
+        except Exception:
+            can_restore = False
+    try:
+        yield
+    finally:
+        if can_restore and previous_handler is not None:
+            signal.signal(signal.SIGINT, previous_handler)
+
+
+@contextmanager
+def prepare_log_stream_input_mode():
+    global ACTIVE_LOG_STREAM_POSIX_FD
+    if os.name == "nt" or sys.stdin is None or not sys.stdin.isatty():
+        yield
+        return
+
+    file_descriptor = sys.stdin.fileno()
+    original_settings = termios.tcgetattr(file_descriptor)
+    previous_fd = ACTIVE_LOG_STREAM_POSIX_FD
+    ACTIVE_LOG_STREAM_POSIX_FD = file_descriptor
+    try:
+        tty.setcbreak(file_descriptor)
+        yield
+    finally:
+        ACTIVE_LOG_STREAM_POSIX_FD = previous_fd
+        termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_settings)
 
 
 def should_stop_log_stream() -> bool:
@@ -1205,17 +1243,12 @@ def should_stop_log_stream_posix() -> bool:
     if sys.stdin is None or not sys.stdin.isatty():
         return False
 
-    file_descriptor = sys.stdin.fileno()
-    original_settings = termios.tcgetattr(file_descriptor)
-    try:
-        tty.setcbreak(file_descriptor)
-        readable, _, _ = select.select([file_descriptor], [], [], 0)
-        if not readable:
-            return False
-        key = os.read(file_descriptor, 1).decode("utf-8", errors="ignore")
-        return key.lower() == "q"
-    finally:
-        termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_settings)
+    file_descriptor = ACTIVE_LOG_STREAM_POSIX_FD or sys.stdin.fileno()
+    readable, _, _ = select.select([file_descriptor], [], [], 0)
+    if not readable:
+        return False
+    key = os.read(file_descriptor, 1).decode("utf-8", errors="ignore")
+    return key.lower() == "q"
 
 
 def resolve_requested_log_path(config_path: Path, *, task_id: str | None, latest: bool) -> Path | None:
