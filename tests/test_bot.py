@@ -242,6 +242,28 @@ class BotTest(unittest.TestCase):
         self.assertNotIn("commit-message.txt", prompt)
         self.assertIn("When implementation and verification are complete, stop and exit immediately", prompt)
 
+    def test_build_task_prompt_for_pull_request_follow_up_only_requests_body_draft_when_needed(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/issue-to-pr-bot",
+            issue_number=53,
+            issue_title="Implement feature",
+            issue_body="Issue body",
+            comment_body="@incle-issue-to-pr-bot 이 리뷰 반영해줘",
+            comment_author="IncleRepo",
+            comment_id=91,
+            is_pull_request=True,
+            pull_request_number=53,
+        )
+
+        prompt = build_task_prompt(request, BotConfig())
+        body_path = get_pr_body_draft_path(request)
+
+        self.assertIn("keep the existing PR title unchanged", prompt)
+        self.assertIn(str(body_path), prompt)
+        self.assertIn("only write", prompt)
+        self.assertIn("If the current PR body can stay as-is", prompt)
+        self.assertNotIn("write the final pull request title draft", prompt)
+
     def test_build_branch_name_is_stable(self) -> None:
         request = IssueRequest(
             repository="IncleRepo/issue-to-pr-bot",
@@ -287,7 +309,7 @@ class BotTest(unittest.TestCase):
             test_commit_message_template="chore(issue-{issue_number}): marker",
         )
 
-        self.assertEqual(build_branch_name(request, config), "work/15-add-github-pr-flow")
+        self.assertEqual(build_branch_name(request, config), "work/15-add-github-pr-flow-comment-21")
         self.assertEqual(build_pull_request_title(request, config), "bot/#15 Add GitHub PR flow!")
         self.assertEqual(build_codex_commit_message(request, config), "feat(issue-15): Add GitHub PR flow!")
         self.assertEqual(build_test_commit_message(request, config), "chore(issue-15): marker")
@@ -304,7 +326,7 @@ class BotTest(unittest.TestCase):
         )
         config = BotConfig(branch_name_template="{commit_type}/{issue_number}-{slug}")
 
-        self.assertEqual(build_branch_name(request, config), "fix/21-map-collision-fix")
+        self.assertEqual(build_branch_name(request, config), "fix/21-map-collision-fix-comment-55")
 
     def test_build_codex_commit_message_infers_fix_for_follow_up_correction(self) -> None:
         request = IssueRequest(

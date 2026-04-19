@@ -47,6 +47,14 @@ def build_branch_name(request: IssueRequest, config: BotConfig | None = None) ->
     config = config or BotConfig()
     rendered = render_request_template(config.branch_name_template, request, config)
     normalized = normalize_branch_name(rendered)
+    if (
+        normalized
+        and not request.is_pull_request
+        and request.comment_id
+        and "{comment_suffix}" not in config.branch_name_template
+        and "{comment_id}" not in config.branch_name_template
+    ):
+        normalized = f"{normalized}-comment-{request.comment_id}"
     return normalized or f"{config.branch_prefix}/issue-{request.issue_number}"
 
 
@@ -263,6 +271,15 @@ def build_task_prompt(
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
     pr_title_path = get_pr_title_draft_path(request)
     pr_body_path = get_pr_body_draft_path(request)
+    if request.is_pull_request:
+        pr_title_rule = "- For pull request follow-up requests, keep the existing PR title unchanged and do not write a new PR title draft unless the wrapper explicitly asks for one."
+        pr_body_rule = (
+            f"- For pull request follow-up requests, only write `{pr_body_path}` if the existing PR body should be updated to reflect the new changes.\n"
+            "- If the current PR body can stay as-is, leave that file absent and the wrapper will preserve the existing body."
+        )
+    else:
+        pr_title_rule = f"- Before exiting, write the final pull request title draft to `{pr_title_path}`."
+        pr_body_rule = f"- Before exiting, write the final pull request body draft to `{pr_body_path}`."
     return "\n".join(
         [
             f"You are working in the {request.repository} repository.",
@@ -312,8 +329,8 @@ def build_task_prompt(
             "- Files under `.issue-to-pr-bot/input/` and `.issue-to-pr-bot/output/` are workspace-only scratch files.",
             "- Never include those workspace-only files in commits, publishable diffs, or pull request changes.",
             "- If you accidentally staged or committed those workspace-only files, remove them from the publishable commit history before exiting.",
-            f"- Before exiting, write the final pull request title draft to `{pr_title_path}`.",
-            f"- Before exiting, write the final pull request body draft to `{pr_body_path}`.",
+            pr_title_rule,
+            pr_body_rule,
             "- Create parent directories for those output files if they do not already exist.",
             "- If the repository has a PR template, follow its structure and fill it naturally instead of leaving question prompts behind.",
             "- Treat that file as the reviewer-facing PR description that the wrapper will submit on your behalf.",

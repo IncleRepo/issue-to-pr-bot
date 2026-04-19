@@ -11,11 +11,13 @@ from app.agent_runner import (
     CentralAgentConfig,
     ClaimedTask,
     TaskInterrupted,
+    build_capacity_waiting_comment,
     build_parser,
     cancel_running_task,
     clear_pid_file,
     collect_runtime_update_wait_pids,
     dispatch_console_command,
+    notify_pending_tasks_waiting_for_capacity,
     extract_issue_number,
     extract_pull_request_number,
     fetch_central_agent_config,
@@ -35,8 +37,10 @@ from app.agent_runner import (
     stream_task_logs,
     try_resolve_log_path,
     build_task_subprocess_command,
+    RuntimeUpdateResult,
 )
 from app.agent.service import execute_task_in_workspace
+from app.bot import build_issue_request
 from app.output_artifacts import (
     get_legacy_workspace_output_artifact_root,
     get_workspace_input_root,
@@ -46,6 +50,21 @@ from app.workspace_state import resolve_workspace_codex_home_root
 
 
 class AgentRunnerTest(unittest.TestCase):
+    def test_build_capacity_waiting_comment_describes_queued_state(self) -> None:
+        request = build_issue_request(
+            {
+                "issue": {"number": 52, "title": "Add battle UI"},
+                "comment": {"id": 900, "body": "@incle-issue-to-pr-bot 구현해줘", "user": {"login": "IncleRepo"}},
+                "repository": {"full_name": "IncleRepo/game-repo"},
+            }
+        )
+
+        body = build_capacity_waiting_comment(request, running_count=6, max_concurrency=6)
+
+        self.assertIn("상태: `queued`", body)
+        self.assertIn("현재 실행 중인 task: `6` / 최대 동시 실행 `6`", body)
+        self.assertIn("자동으로 시작합니다", body)
+
     @patch("app.agent.service.main", return_value=0)
     def test_agent_runner_module_executes_service_main(self, main_mock) -> None:
         with self.assertRaises(SystemExit) as context:
@@ -129,7 +148,7 @@ class AgentRunnerTest(unittest.TestCase):
             delivery_id=None,
             repository="IncleRepo/example",
             default_branch="main",
-            payload={"issue": {"number": 9}},
+            payload={"issue": {"number": 9}, "comment": {"id": 77}},
             github_token="token",
         )
         pr_task = ClaimedTask(
@@ -142,8 +161,48 @@ class AgentRunnerTest(unittest.TestCase):
             github_token="token",
         )
 
-        self.assertEqual(resolve_task_lock_key(issue_task), "IncleRepo/example:issue-9")
+        self.assertEqual(resolve_task_lock_key(issue_task), "IncleRepo/example:issue-9-comment-77")
         self.assertEqual(resolve_task_lock_key(pr_task), "IncleRepo/example:pr-12")
+
+    @patch("app.agent.service.create_issue_comment", return_value="https://example.com/comment/1")
+    @patch("app.agent.service.log_message")
+    def test_notify_pending_tasks_waiting_for_capacity_posts_once_per_task(self, mock_log, mock_create_comment) -> None:
+        config = AgentConfig(
+            control_plane_url="https://example.com",
+            agent_token="token",
+            workspace_root=Path(r"C:\work"),
+            log_path=Path(r"C:\logs\agent.log"),
+            max_concurrency=6,
+        )
+        task = ClaimedTask(
+            task_id="task-queued",
+            event_name="issue_comment",
+            delivery_id="delivery-queued",
+            repository="IncleRepo/example",
+            default_branch="main",
+            payload={
+                "action": "created",
+                "issue": {"number": 52, "title": "Add battle UI"},
+                "comment": {"id": 901, "body": "@incle-issue-to-pr-bot 구현해줘", "user": {"login": "IncleRepo"}},
+                "repository": {"full_name": "IncleRepo/example"},
+            },
+            github_token="token",
+        )
+        running = {
+            f"run-{index}": type("Runtime", (), {"lock_key": f"scope-{index}", "workspace_path": Path(rf"C:\work\repo-{index}")})()
+            for index in range(6)
+        }
+        notified: set[str] = set()
+
+        notify_pending_tasks_waiting_for_capacity(config, [task], running, 6, notified)
+        notify_pending_tasks_waiting_for_capacity(config, [task], running, 6, notified)
+
+        mock_create_comment.assert_called_once()
+        self.assertEqual(mock_create_comment.call_args.args[0], "IncleRepo/example")
+        self.assertEqual(mock_create_comment.call_args.args[1], 52)
+        self.assertIn("queued", mock_create_comment.call_args.args[2])
+        self.assertIn("task-queued", notified)
+        self.assertTrue(any("대기 안내 댓글 생성됨" in call.args[1] for call in mock_log.call_args_list))
 
     @patch("app.agent.service.is_process_running", return_value=False)
     def test_read_running_pid_cleans_stale_pid_file(self, _mock_running) -> None:
@@ -281,7 +340,7 @@ class AgentRunnerTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = Path(temp_dir)
-            repo_dir = workspace_root / "IncleRepo__example" / "issue-9"
+            repo_dir = workspace_root / "IncleRepo__example" / "issue-9-comment-321"
             repo_dir.joinpath(".git", "info").mkdir(parents=True)
             output_dir = get_workspace_output_root(repo_dir)
             output_dir.mkdir(parents=True)
@@ -339,7 +398,7 @@ class AgentRunnerTest(unittest.TestCase):
 
         commands = [call.args[0] for call in mock_run_command.call_args_list]
         self.assertIn(
-            ["git", "clone", "https://x-access-token:token@github.com/IncleRepo/example.git", str(workspace_root / "IncleRepo__example" / "issue-9")],
+            ["git", "clone", "https://x-access-token:token@github.com/IncleRepo/example.git", str(workspace_root / "IncleRepo__example" / "issue-9-comment-1")],
             commands,
         )
 
@@ -354,7 +413,7 @@ class AgentRunnerTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = Path(temp_dir)
-            repo_dir = workspace_root / "IncleRepo__example" / "issue-9"
+            repo_dir = workspace_root / "IncleRepo__example" / "issue-9-comment-1"
             repo_dir.mkdir(parents=True)
             repo_dir.joinpath(".git", "info").mkdir(parents=True)
             config = AgentConfig(
@@ -401,11 +460,11 @@ class AgentRunnerTest(unittest.TestCase):
             delivery_id=None,
             repository="IncleRepo/example",
             default_branch="main",
-            payload={"issue": {"number": 7}},
+            payload={"issue": {"number": 7}, "comment": {"id": 41}},
             github_token="token",
         )
         normalized = str(resolve_workspace_path(config, task)).replace("\\", "/")
-        self.assertEqual(normalized, "C:/work/IncleRepo__example/issue-7")
+        self.assertEqual(normalized, "C:/work/IncleRepo__example/issue-7-comment-41")
 
     @patch("app.agent.service.subprocess.run")
     def test_run_command_uses_utf8_replace(self, mock_run) -> None:
@@ -660,6 +719,48 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertIn("이미 최신 버전입니다", stdout.getvalue())
 
+    @patch("app.agent.service.install_latest_agent_runtime")
+    @patch("app.agent.service.get_running_entries", return_value=[{"task_id": "task-1"}])
+    def test_run_console_update_blocks_when_tasks_running(self, mock_running, mock_install_runtime) -> None:
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            keep_running = run_console_update(Path(r"C:\agent\agent-config.json"))
+
+        self.assertTrue(keep_running)
+        self.assertIn("실행 중인 task가 있어 update를 시작할 수 없습니다.", stdout.getvalue())
+        mock_running.assert_called_once()
+        mock_install_runtime.assert_not_called()
+
+    @patch("app.agent.service.install_latest_agent_runtime")
+    @patch("app.agent.service.load_agent_config")
+    def test_run_console_update_exits_console_for_interactive_restart(
+        self,
+        mock_load_config,
+        mock_install_runtime,
+    ) -> None:
+        config_path = Path(r"C:\agent\agent-config.json")
+        mock_load_config.return_value = AgentConfig(
+            control_plane_url="https://example.com",
+            agent_token="token",
+            workspace_root=Path(r"C:\agent\work"),
+        )
+        mock_install_runtime.return_value = RuntimeUpdateResult(
+            "업데이트 준비가 끝났습니다: 0.3.7. 잠시 후 현재 콘솔에서 새 agent로 다시 시작합니다.",
+            should_exit_console=True,
+        )
+
+        with patch("app.agent.service.INTERACTIVE_CONSOLE_MODE", True):
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                keep_running = run_console_update(config_path)
+
+        self.assertFalse(keep_running)
+        self.assertIn("업데이트 준비가 끝났습니다", stdout.getvalue())
+        mock_install_runtime.assert_called_once_with(
+            mock_load_config.return_value,
+            config_path,
+            progress_callback=print,
+            restart_interactive=True,
+        )
+
     @patch("app.agent.service.spawn_runtime_replacement_helper")
     @patch("app.agent.service.install_standalone_binary")
     def test_install_latest_agent_runtime_schedules_replacement_when_newer_version_exists(
@@ -699,10 +800,59 @@ class AgentRunnerTest(unittest.TestCase):
                 release_repository="IncleRepo/issue-to-pr-bot",
             )
 
-            message = install_latest_agent_runtime(config, config_path)
+            result = install_latest_agent_runtime(config, config_path)
 
-        self.assertIn("업데이트를 예약했습니다: 0.3.6", message)
-        mock_spawn_helper.assert_called_once_with(staged_path, runtime_path, config_path)
+        self.assertIn("업데이트를 예약했습니다: 0.3.6", result.message)
+        self.assertFalse(result.should_exit_console)
+        mock_spawn_helper.assert_called_once_with(
+            staged_path,
+            runtime_path,
+            config_path,
+            restart_interactive=False,
+        )
+
+    @patch("app.agent.service.spawn_runtime_replacement_helper")
+    @patch("app.agent.service.install_standalone_binary")
+    def test_install_latest_agent_runtime_interactive_restart_exits_console(
+        self,
+        mock_install,
+        mock_spawn_helper,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "agent-config.json"
+            runtime_path = Path(temp_dir) / "bin" / "issue-to-pr-bot-agent"
+            runtime_path.parent.mkdir(parents=True)
+            runtime_path.write_text("binary", encoding="utf-8")
+            staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent"
+            staged_path.write_text("new-binary", encoding="utf-8")
+            mock_install.return_value = (staged_path, "updated", "0.3.6")
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=Path(temp_dir) / "work",
+                log_path=Path(temp_dir) / "agent.log",
+                managed_runtime_path=runtime_path,
+                managed_runtime_version="0.3.1",
+                release_repository="IncleRepo/issue-to-pr-bot",
+            )
+            progress_messages: list[str] = []
+
+            result = install_latest_agent_runtime(
+                config,
+                config_path,
+                progress_callback=progress_messages.append,
+                restart_interactive=True,
+            )
+
+        self.assertTrue(result.should_exit_console)
+        self.assertIn("업데이트 준비가 끝났습니다: 0.3.6", result.message)
+        self.assertIn("새 버전 확인: 0.3.6", progress_messages)
+        mock_spawn_helper.assert_called_once_with(
+            staged_path,
+            runtime_path,
+            config_path,
+            restart_interactive=True,
+        )
 
     def test_collect_runtime_update_wait_pids_includes_running_task_pids(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

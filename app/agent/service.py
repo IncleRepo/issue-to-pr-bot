@@ -21,11 +21,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from app import main as bot_main
 from app.automation.parsing import build_issue_request, parse_bot_command
 from app.codex_provider import interrupt_active_codex_process
+from app.github_pr import create_issue_comment
 from app.output_artifacts import (
     BOT_WORKSPACE_ROOT_ENV,
     ensure_task_output_root,
@@ -44,7 +45,7 @@ DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-conf
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SUPERVISOR_REFRESH_SECONDS = 1
 CENTRAL_CONFIG_REFRESH_SECONDS = 60
-DEFAULT_MAX_CONCURRENCY = 2
+DEFAULT_MAX_CONCURRENCY = 6
 EXECUTOR_THREAD_CAP = 8
 WORKSPACE_GC_INTERVAL_SECONDS = 1800
 INTERACTIVE_CONSOLE_MODE = False
@@ -113,6 +114,12 @@ class RunningTask:
     workspace_path: Path
 
 
+@dataclass(frozen=True)
+class RuntimeUpdateResult:
+    message: str
+    should_exit_console: bool = False
+
+
 class TaskInterrupted(Exception):
     """사용자가 현재 작업을 명시적으로 중단했음을 나타낸다."""
 
@@ -142,6 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 target=Path(args.target),
                 wait_pids=[int(raw) for raw in args.wait_pid],
                 config_path=Path(args.config),
+                restart_interactive=bool(getattr(args, "restart_interactive", False)),
             )
 
         config = load_agent_config(Path(args.config))
@@ -175,6 +183,7 @@ def build_parser(*, include_internal: bool) -> argparse.ArgumentParser:
         replace_runtime.add_argument("--target", required=True)
         replace_runtime.add_argument("--wait-pid", action="append", required=True)
         replace_runtime.add_argument("--config", required=True)
+        replace_runtime.add_argument("--restart-interactive", action="store_true")
     else:
         parser.set_defaults(command="serve")
     return parser
@@ -219,6 +228,7 @@ def run_supervisor_loop(
     last_refresh_at = 0.0
     last_workspace_gc_at = 0.0
     pending: list[ClaimedTask] = []
+    pending_capacity_notified_task_ids: set[str] = set()
     running: dict[str, RunningTask] = {}
     max_executor_workers = max(EXECUTOR_THREAD_CAP, config.max_concurrency)
 
@@ -249,6 +259,13 @@ def run_supervisor_loop(
                 start_pending_tasks(executor, effective_config, config_path, pending, running, effective_concurrency)
                 prefetch_tasks(effective_config, pending, running, effective_concurrency)
                 start_pending_tasks(executor, effective_config, config_path, pending, running, effective_concurrency)
+                notify_pending_tasks_waiting_for_capacity(
+                    effective_config,
+                    pending,
+                    running,
+                    effective_concurrency,
+                    pending_capacity_notified_task_ids,
+                )
                 sync_runtime_state(config_path, running)
                 time.sleep(min(max(effective_config.poll_interval_seconds, 1), SUPERVISOR_REFRESH_SECONDS))
     finally:
@@ -345,10 +362,23 @@ def handle_console_logs_command(config_path: Path, parts: list[str]) -> bool:
 
 
 def run_console_update(config_path: Path) -> bool:
+    running_entries = get_running_entries(config_path)
+    if running_entries:
+        print("실행 중인 task가 있어 update를 시작할 수 없습니다.")
+        print("  - 현재 상태를 보려면: ps")
+        print("  - 특정 task를 중지하려면: cancel <task-id>")
+        print("  - 실행 중인 task를 모두 중지하려면: stop all")
+        return True
+
     config = load_agent_config(config_path)
-    message = install_latest_agent_runtime(config, config_path)
-    print(message)
-    return True
+    result = install_latest_agent_runtime(
+        config,
+        config_path,
+        progress_callback=print,
+        restart_interactive=INTERACTIVE_CONSOLE_MODE,
+    )
+    print(result.message)
+    return not result.should_exit_console
 
 
 def start_agent_process(config_path: Path) -> int:
@@ -518,11 +548,21 @@ def format_elapsed(started_at: Any) -> str:
     return f"{seconds}s"
 
 
-def install_latest_agent_runtime(config: AgentConfig, config_path: Path) -> str:
+def install_latest_agent_runtime(
+    config: AgentConfig,
+    config_path: Path,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+    restart_interactive: bool = False,
+) -> RuntimeUpdateResult:
+    def emit_progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
     runtime_path = config.managed_runtime_path
     release_repository = config.release_repository
     if runtime_path is None or not release_repository:
-        return "관리 대상 agent 설치가 아니라 업데이트를 건너뜁니다."
+        return RuntimeUpdateResult("관리 대상 agent 설치가 아니라 업데이트를 건너뜁니다.")
 
     install_root = runtime_path.parent
     if not runtime_path.exists():
@@ -531,22 +571,36 @@ def install_latest_agent_runtime(config: AgentConfig, config_path: Path) -> str:
             install_root,
             repository=release_repository,
             target_name=runtime_path.name,
+            progress_callback=progress_callback,
         )
         update_agent_config_runtime_metadata(config_path, target_path, target_version)
-        return f"agent를 새로 설치했습니다: {target_path} ({target_version})"
+        return RuntimeUpdateResult(f"agent를 새로 설치했습니다: {target_path} ({target_version})")
 
     target_path, _, target_version = install_standalone_binary(
         "agent",
         install_root,
         repository=release_repository,
         target_name=f".staged-{runtime_path.name}",
+        progress_callback=progress_callback,
     )
     if not is_newer_version(target_version, config.managed_runtime_version or APP_VERSION):
         target_path.unlink(missing_ok=True)
-        return f"이미 최신 버전입니다: {config.managed_runtime_version or APP_VERSION}"
+        return RuntimeUpdateResult(f"이미 최신 버전입니다: {config.managed_runtime_version or APP_VERSION}")
 
-    spawn_runtime_replacement_helper(target_path, runtime_path, config_path)
-    return (
+    emit_progress(f"새 버전 확인: {target_version}")
+    emit_progress("기존 agent를 새 runtime으로 교체할 준비를 마쳤습니다.")
+    spawn_runtime_replacement_helper(
+        target_path,
+        runtime_path,
+        config_path,
+        restart_interactive=restart_interactive,
+    )
+    if restart_interactive:
+        return RuntimeUpdateResult(
+            f"업데이트 준비가 끝났습니다: {target_version}. 잠시 후 현재 콘솔에서 새 agent로 다시 시작합니다.",
+            should_exit_console=True,
+        )
+    return RuntimeUpdateResult(
         f"업데이트를 예약했습니다: {target_version}. "
         "현재 콘솔이 종료되고 실행 중 task가 끝나면 새 agent가 교체된 뒤 자동으로 다시 시작됩니다."
     )
@@ -1045,6 +1099,51 @@ def start_pending_tasks(executor: ThreadPoolExecutor, config: AgentConfig, confi
     pending[:] = remaining
 
 
+def notify_pending_tasks_waiting_for_capacity(
+    config: AgentConfig,
+    pending: list[ClaimedTask],
+    running: dict[str, RunningTask],
+    effective_concurrency: int,
+    notified_task_ids: set[str],
+) -> None:
+    current_pending_ids = {task.task_id for task in pending}
+    notified_task_ids.intersection_update(current_pending_ids)
+    if not pending or len(running) < max(1, effective_concurrency):
+        return
+
+    for task in pending:
+        if task.task_id in notified_task_ids:
+            continue
+        request = build_issue_request(task.payload)
+        body = build_capacity_waiting_comment(request, running_count=len(running), max_concurrency=effective_concurrency)
+        try:
+            comment_url = create_issue_comment(task.repository, request.issue_number, body, token=task.github_token)
+            if comment_url:
+                log_message(config, f"대기 안내 댓글 생성됨: {comment_url}")
+        except Exception as error:
+            log_message(config, f"대기 안내 댓글 생성 실패: task_id={task.task_id} / error={error}")
+        notified_task_ids.add(task.task_id)
+
+
+def build_capacity_waiting_comment(request, *, running_count: int, max_concurrency: int) -> str:
+    scope_label = f"PR #{request.pull_request_number}" if request.is_pull_request and request.pull_request_number else f"이슈 #{request.issue_number}"
+    return "\n".join(
+        [
+            "## 대기 안내",
+            "",
+            f"- 대상: `{scope_label}`",
+            "- 상태: `queued`",
+            f"- 현재 실행 중인 task: `{running_count}` / 최대 동시 실행 `{max_concurrency}`",
+            "- 실행 슬롯이 모두 사용 중이라 대기열에 등록했습니다.",
+            "- 앞선 작업이 끝나는 대로 자동으로 시작합니다.",
+            "",
+            "### 다음 단계",
+            "- 별도 재요청 없이 기다리면 됩니다.",
+            "- 급하면 agent 창에서 `ps`로 현재 실행 중인 task를 확인할 수 있습니다.",
+        ]
+    ).strip()
+
+
 def run_task_process(config: AgentConfig, config_path: Path, task: ClaimedTask, *, executor: ThreadPoolExecutor | None = None) -> RunningTask:
     task_file = resolve_task_file_path(config_path, task.task_id)
     log_path = resolve_task_log_path(config_path, task.task_id)
@@ -1340,6 +1439,9 @@ def resolve_workspace_segment(task: ClaimedTask) -> str:
         return f"pr-{pull_request_number}"
     issue_number = extract_issue_number(task.payload)
     if issue_number is not None:
+        comment_id = extract_comment_id(task.payload)
+        if comment_id is not None:
+            return f"issue-{issue_number}-comment-{comment_id}"
         return f"issue-{issue_number}"
     return f"task-{task.task_id}"
 
@@ -1405,11 +1507,17 @@ def update_agent_config_runtime_metadata(config_path: Path, runtime_path: Path, 
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Path) -> None:
+def spawn_runtime_replacement_helper(
+    source: Path,
+    target: Path,
+    config_path: Path,
+    *,
+    restart_interactive: bool = False,
+) -> None:
     creationflags = 0
     startupinfo = None
     start_new_session = False
-    if os.name == "nt":
+    if os.name == "nt" and not restart_interactive:
         creationflags = (
             subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.DETACHED_PROCESS
@@ -1418,7 +1526,7 @@ def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Pa
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = 0
-    else:
+    elif os.name != "nt":
         start_new_session = True
     command = [
         str(source),
@@ -1434,6 +1542,16 @@ def spawn_runtime_replacement_helper(source: Path, target: Path, config_path: Pa
         "--config",
         str(config_path),
     ])
+    if restart_interactive:
+        command.append("--restart-interactive")
+        subprocess.Popen(
+            command,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+            start_new_session=False,
+            close_fds=False,
+        )
+        return
     subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
@@ -1463,7 +1581,14 @@ def collect_runtime_update_wait_pids(config_path: Path) -> list[int]:
     return sorted(wait_pids)
 
 
-def replace_runtime_binary(source: Path, target: Path, *, wait_pids: Sequence[int], config_path: Path) -> int:
+def replace_runtime_binary(
+    source: Path,
+    target: Path,
+    *,
+    wait_pids: Sequence[int],
+    config_path: Path,
+    restart_interactive: bool = False,
+) -> int:
     deadline = time.time() + 120
     pending = {pid for pid in wait_pids if pid > 0}
     while time.time() < deadline and any(is_process_running(pid) for pid in pending):
@@ -1477,6 +1602,13 @@ def replace_runtime_binary(source: Path, target: Path, *, wait_pids: Sequence[in
         current_mode = target.stat().st_mode
         target.chmod(current_mode | 0o111)
     update_agent_config_runtime_metadata(config_path, target, APP_VERSION)
+    try:
+        source.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    if restart_interactive:
+        os.execv(str(target), [str(target), "--config", str(config_path)])
 
     creationflags = 0
     startupinfo = None

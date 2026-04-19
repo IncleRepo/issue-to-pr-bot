@@ -30,6 +30,7 @@ AGENTS_TEMPLATE_NAME = "AGENTS.md.example"
 DEFAULT_AGENT_CONFIG_PATH = Path.home() / ".issue-to-pr-bot-agent" / "agent-config.json"
 DEFAULT_SUPPORT_ROOT = Path.home() / "issue-to-pr-bot-data"
 DEFAULT_AGENT_INSTALL_ROOT = Path.home() / ".issue-to-pr-bot-agent" / "bin"
+DEFAULT_AGENT_MAX_CONCURRENCY = 6
 AUTO_INSTALL_PACKAGES = {
     "gh": {"label": "GitHub CLI", "winget": "GitHub.cli", "choco": "gh", "apt": "gh"},
     "git": {"label": "Git", "winget": "Git.Git", "choco": "git", "apt": "git"},
@@ -87,7 +88,7 @@ class ControlPlaneOptions:
     bot_mention: str
     agent_repositories: list[str]
     agent_poll_interval_seconds: int = 10
-    agent_max_concurrency: int = 2
+    agent_max_concurrency: int = DEFAULT_AGENT_MAX_CONCURRENCY
     force: bool = False
     dry_run: bool = False
 
@@ -102,7 +103,7 @@ class AgentBootstrapOptions:
     config_path: Path = DEFAULT_AGENT_CONFIG_PATH
     log_path: Path = Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log"
     poll_interval_seconds: int = 10
-    max_concurrency: int = 2
+    max_concurrency: int = DEFAULT_AGENT_MAX_CONCURRENCY
     release_repository: str = RELEASE_REPOSITORY
     install_task: bool = True
     task_name: str = "issue-to-pr-bot-agent"
@@ -129,7 +130,7 @@ class ControlPlaneBootstrapOptions:
     github_app_private_key_file: Path
     agent_repositories: list[str]
     agent_poll_interval_seconds: int = 10
-    agent_max_concurrency: int = 2
+    agent_max_concurrency: int = DEFAULT_AGENT_MAX_CONCURRENCY
     agent_token: str | None = None
     webhook_secret: str | None = None
     force: bool = False
@@ -327,7 +328,7 @@ def build_control_plane_options(args: argparse.Namespace) -> ControlPlaneOptions
         bot_mention=args.bot_mention,
         agent_repositories=list(getattr(args, "agent_repositories", [])),
         agent_poll_interval_seconds=int(getattr(args, "agent_poll_interval_seconds", 10)),
-        agent_max_concurrency=int(getattr(args, "agent_max_concurrency", 2)),
+        agent_max_concurrency=int(getattr(args, "agent_max_concurrency", DEFAULT_AGENT_MAX_CONCURRENCY)),
         force=args.force,
         dry_run=args.dry_run,
     )
@@ -342,7 +343,7 @@ def build_control_plane_bootstrap_options(args: argparse.Namespace) -> ControlPl
         github_app_private_key_file=Path(args.github_app_private_key_file).resolve(),
         agent_repositories=list(getattr(args, "agent_repositories", [])),
         agent_poll_interval_seconds=int(getattr(args, "agent_poll_interval_seconds", 10)),
-        agent_max_concurrency=int(getattr(args, "agent_max_concurrency", 2)),
+        agent_max_concurrency=int(getattr(args, "agent_max_concurrency", DEFAULT_AGENT_MAX_CONCURRENCY)),
         agent_token=getattr(args, "agent_token", None),
         webhook_secret=getattr(args, "webhook_secret", None),
         force=args.force,
@@ -360,7 +361,7 @@ def build_agent_bootstrap_options(args: argparse.Namespace) -> AgentBootstrapOpt
         config_path=Path(args.config_path).resolve(),
         log_path=Path(getattr(args, "log_path", Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log")).resolve(),
         poll_interval_seconds=args.poll_interval_seconds,
-        max_concurrency=int(getattr(args, "max_concurrency", 2)),
+        max_concurrency=int(getattr(args, "max_concurrency", DEFAULT_AGENT_MAX_CONCURRENCY)),
         release_repository=str(getattr(args, "release_repository", RELEASE_REPOSITORY)),
         install_task=not getattr(args, "skip_task", False),
         task_name=getattr(args, "task_name", "issue-to-pr-bot-agent"),
@@ -396,7 +397,7 @@ def build_bootstrap_all_options(args: argparse.Namespace) -> BootstrapAllOptions
         config_path=Path(args.config_path).resolve(),
         log_path=Path(getattr(args, "log_path", Path.home() / ".issue-to-pr-bot-agent" / "logs" / "agent.log")).resolve(),
         poll_interval_seconds=args.poll_interval_seconds,
-        max_concurrency=int(getattr(args, "max_concurrency", 2)),
+        max_concurrency=int(getattr(args, "max_concurrency", DEFAULT_AGENT_MAX_CONCURRENCY)),
         release_repository=str(getattr(args, "release_repository", RELEASE_REPOSITORY)),
         install_task=not getattr(args, "skip_task", False),
         task_name=getattr(args, "task_name", "issue-to-pr-bot-agent"),

@@ -48,7 +48,7 @@ class InstallManagerTest(unittest.TestCase):
             self.assertIn("@issue-to-pr-bot", (target / "wrangler.jsonc").read_text(encoding="utf-8"))
             self.assertIn("Acme/repo-a,Acme/repo-b", (target / "wrangler.jsonc").read_text(encoding="utf-8"))
             self.assertIn('"AGENT_POLL_INTERVAL_SECONDS": 25', (target / "wrangler.jsonc").read_text(encoding="utf-8"))
-            self.assertIn('"AGENT_MAX_CONCURRENCY": 2', (target / "wrangler.jsonc").read_text(encoding="utf-8"))
+            self.assertIn('"AGENT_MAX_CONCURRENCY": 6', (target / "wrangler.jsonc").read_text(encoding="utf-8"))
             self.assertEqual([operation.action for operation in result.operations], ["created", "created", "created", "created"])
 
     @patch("app.install_manager.ensure_command_available")
@@ -130,7 +130,7 @@ class InstallManagerTest(unittest.TestCase):
             self.assertEqual(config_data["managed_runtime_path"], r"C:\agent-bin\issue-to-pr-bot-agent.exe")
             self.assertEqual(config_data["release_repository"], "IncleRepo/issue-to-pr-bot")
             self.assertEqual(config_data["managed_runtime_version"], "1.2.3")
-            self.assertEqual(config_data["max_concurrency"], 2)
+            self.assertEqual(config_data["max_concurrency"], 6)
             self.assertEqual(result.operations[0].action, "created")
             self.assertEqual(result.runtime_path, Path(r"C:\agent-bin\issue-to-pr-bot-agent.exe"))
             self.assertEqual(result.runtime_version, "1.2.3")

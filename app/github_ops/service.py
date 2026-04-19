@@ -628,8 +628,7 @@ def resolve_publish_branch_name(workspace: Path, suggested_branch_name: str, bas
 
 
 def branch_has_publishable_commits(workspace: Path, branch_name: str, base_branch: str) -> bool:
-    remote_head = get_remote_branch_head(branch_name, workspace)
-    target_ref = remote_head or f"origin/{base_branch}"
+    target_ref = resolve_branch_comparison_ref(branch_name, workspace) or f"origin/{base_branch}"
     result = subprocess.run(
         [
             "git",
@@ -653,6 +652,91 @@ def branch_has_publishable_commits(workspace: Path, branch_name: str, base_branc
     if result.returncode != 0:
         raise RuntimeError(f"로컬 커밋 확인 실패: {(result.stdout or '').strip()}")
     return int((result.stdout or "0").strip() or "0") > 0
+
+
+def resolve_branch_comparison_ref(branch_name: str, workspace: Path) -> str | None:
+    remote_head = get_remote_branch_head(branch_name, workspace)
+    if remote_head is None:
+        return None
+
+    remote_tracking_ref = f"refs/remotes/origin/{branch_name}"
+    if git_ref_exists(workspace, remote_tracking_ref):
+        return remote_tracking_ref
+
+    fetch_result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "fetch",
+            "origin",
+            f"{branch_name}:{remote_tracking_ref}",
+        ],
+        cwd=workspace,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        **build_hidden_windows_subprocess_kwargs(),
+    )
+    if fetch_result.returncode == 0 and git_ref_exists(workspace, remote_tracking_ref):
+        return remote_tracking_ref
+
+    if git_commit_exists(workspace, remote_head):
+        return remote_head
+    return None
+
+
+def git_ref_exists(workspace: Path, ref_name: str) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "rev-parse",
+            "--verify",
+            ref_name,
+        ],
+        cwd=workspace,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        **build_hidden_windows_subprocess_kwargs(),
+    )
+    return result.returncode == 0
+
+
+def git_commit_exists(workspace: Path, ref_name: str) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={workspace}",
+            "-c",
+            "core.autocrlf=false",
+            "cat-file",
+            "-e",
+            f"{ref_name}^{{commit}}",
+        ],
+        cwd=workspace,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        **build_hidden_windows_subprocess_kwargs(),
+    )
+    return result.returncode == 0
 
 
 def has_unmerged_paths(workspace: Path) -> bool:
@@ -925,11 +1009,21 @@ def ensure_pull_request(
     changed_files: list[str],
     verification_commands: list[str],
 ) -> str:
-    body = build_pull_request_body(request, config, workspace, changed_files, verification_commands)
-    title = load_pull_request_title_draft(request, workspace, config) or build_pull_request_title(request, config)
     existing_url = find_existing_pull_request(repository, branch_name, base_branch, token)
     if existing_url:
         print(f"기존 PR 사용: {existing_url}")
+        if request.is_pull_request:
+            body_draft = load_pull_request_body_draft(request, workspace, config)
+            if body_draft:
+                github_request(
+                    "PATCH",
+                    f"/repos/{repository}/pulls/{parse_pull_request_number(existing_url)}",
+                    token,
+                    {"body": finalize_pull_request_body(body_draft, request)},
+                )
+            return existing_url
+        body = build_pull_request_body(request, config, workspace, changed_files, verification_commands)
+        title = load_pull_request_title_draft(request, workspace, config) or build_pull_request_title(request, config)
         existing_number = parse_pull_request_number(existing_url)
         if existing_number:
             github_request(
@@ -940,6 +1034,8 @@ def ensure_pull_request(
             )
         return existing_url
 
+    body = build_pull_request_body(request, config, workspace, changed_files, verification_commands)
+    title = load_pull_request_title_draft(request, workspace, config) or build_pull_request_title(request, config)
     owner = repository.split("/", 1)[0]
     print(f"PR 제목 preview: {truncate_log_text(title, 200)}")
     print(f"PR 본문 preview:\n{truncate_log_text(body, 600)}")

@@ -79,6 +79,54 @@ class ReleaseChannelTest(unittest.TestCase):
         self.assertEqual(version, "1.2.3")
         self.assertTrue(installed_path.name.startswith("issue-to-pr-bot-agent"))
 
+    @patch("app.release_channel.fetch_latest_release_info")
+    @patch("app.release_channel.download_release_asset")
+    def test_install_standalone_binary_reports_progress(
+        self,
+        mock_download_asset,
+        mock_fetch_release,
+    ) -> None:
+        platform_tag = detect_platform_tag()
+        asset_name = standalone_archive_name("agent", platform_tag)
+        release = ReleaseInfo(
+            tag_name="v1.2.3",
+            version="1.2.3",
+            assets=(ReleaseAsset(asset_name, "https://example.com/agent"),),
+        )
+        mock_fetch_release.return_value = release
+
+        def fake_download(_asset: ReleaseAsset, destination: Path, *, timeout: int = 60) -> Path:
+            if destination.suffix == ".zip":
+                with zipfile.ZipFile(destination, "w") as archive:
+                    archive.writestr(
+                        "bundle/" + ("issue-to-pr-bot-agent.exe" if platform_tag.startswith("windows-") else "issue-to-pr-bot-agent"),
+                        b"binary",
+                    )
+            else:
+                with tarfile.open(destination, "w:gz") as archive:
+                    data = b"binary"
+                    info = tarfile.TarInfo(
+                        name="bundle/" + ("issue-to-pr-bot-agent.exe" if platform_tag.startswith("windows-") else "issue-to-pr-bot-agent")
+                    )
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+            return destination
+
+        mock_download_asset.side_effect = fake_download
+        progress_messages: list[str] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            install_standalone_binary(
+                "agent",
+                Path(temp_dir),
+                progress_callback=progress_messages.append,
+            )
+
+        self.assertGreaterEqual(len(progress_messages), 6)
+        self.assertIn("[1/5] 최신 릴리즈 정보를 확인하는 중...", progress_messages)
+        self.assertIn("[3/5] 다운로드 중: " + asset_name, progress_messages)
+        self.assertTrue(progress_messages[-1].startswith("설치 완료: issue-to-pr-bot-agent"))
+
 
 if __name__ == "__main__":
     unittest.main()

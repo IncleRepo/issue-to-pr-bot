@@ -10,6 +10,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from app.versioning import APP_VERSION, RELEASE_REPOSITORY
 
@@ -154,8 +155,14 @@ def install_standalone_binary(
     version: str | None = None,
     platform_tag: str | None = None,
     target_name: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[Path, str, str]:
+    def emit_progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
     actual_platform = platform_tag or detect_platform_tag()
+    emit_progress("[1/5] 최신 릴리즈 정보를 확인하는 중...")
     release = fetch_latest_release_info(repository)
     target_version = normalize_version(version) if version else release.version
     if version and normalize_version(release.version) != target_version:
@@ -163,21 +170,26 @@ def install_standalone_binary(
             f"현재 구현은 latest 릴리즈 설치만 지원합니다. latest={release.version}, requested={target_version}"
         )
     asset = select_release_asset(release, role, platform_tag=actual_platform)
+    emit_progress(f"[2/5] 설치 자산을 선택했습니다: {asset.name}")
     install_root.mkdir(parents=True, exist_ok=True)
     archive_path = install_root / asset.name
     temp_extract_dir = install_root / f".extract-{role}-{release.version}"
     if temp_extract_dir.exists():
         shutil.rmtree(temp_extract_dir)
+    emit_progress(f"[3/5] 다운로드 중: {asset.name}")
     download_release_asset(asset, archive_path)
+    emit_progress("[4/5] 압축을 해제하는 중...")
     extract_release_asset(archive_path, temp_extract_dir)
     extracted_binary = locate_extracted_binary(temp_extract_dir, role, platform_tag=actual_platform)
     binary_name = target_name or standalone_binary_name(role, actual_platform)
     target_binary = install_root / binary_name
     action = "updated" if target_binary.exists() else "created"
+    emit_progress(f"[5/5] 실행 파일을 배치하는 중: {binary_name}")
     shutil.copy2(extracted_binary, target_binary)
     if not is_windows_platform():
         current_mode = target_binary.stat().st_mode
         target_binary.chmod(current_mode | 0o111)
     archive_path.unlink(missing_ok=True)
     shutil.rmtree(temp_extract_dir, ignore_errors=True)
+    emit_progress(f"설치 완료: {binary_name} ({release.version})")
     return target_binary, action, release.version

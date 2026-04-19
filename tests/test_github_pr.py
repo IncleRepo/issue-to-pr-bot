@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from os import environ
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.bot import IssueRequest
 from app.config import BotConfig
@@ -14,6 +14,7 @@ from app.github_pr import (
     apply_base_sync_strategy,
     apply_issue_metadata,
     apply_pull_request_metadata,
+    branch_has_publishable_commits,
     build_pull_request_body,
     commit_push_and_open_pr,
     create_issue_comment,
@@ -552,6 +553,100 @@ class GitHubPrTest(unittest.TestCase):
 
         self.assertEqual(pr_url, "https://example.com/pr/25")
         self.assertEqual(github_request_mock.call_args.args[3]["title"], "배경에 구름 추가")
+
+    def test_ensure_pull_request_updates_body_only_for_pull_request_follow_up_when_draft_exists(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/sample-repo",
+            issue_number=25,
+            issue_title="[Feature] 배경에 구름 추가",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 이 리뷰 반영해줘",
+            comment_author="IncleRepo",
+            comment_id=99,
+            is_pull_request=True,
+            pull_request_number=25,
+        )
+        config = BotConfig(pr_title_template="wrapper title fallback")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            body_path = get_pr_body_draft_path(request, workspace)
+            body_path.parent.mkdir(parents=True, exist_ok=True)
+            body_path.write_text("## 변경 사항\n\n- 리뷰 반영 내용을 추가로 명시합니다.\n", encoding="utf-8")
+            with (
+                patch("app.github_pr.find_existing_pull_request", return_value="https://example.com/pull/25"),
+                patch("app.github_pr.github_request") as github_request_mock,
+            ):
+                pr_url = ensure_pull_request(
+                    repository=request.repository,
+                    branch_name="feat/25-clouds",
+                    base_branch="main",
+                    request=request,
+                    token="token",
+                    config=config,
+                    workspace=workspace,
+                    changed_files=["index.html"],
+                    verification_commands=[],
+                )
+
+        self.assertEqual(pr_url, "https://example.com/pull/25")
+        self.assertEqual(
+            github_request_mock.call_args.args[3],
+            {"body": "## 변경 사항\n\n- 리뷰 반영 내용을 추가로 명시합니다.\n\nCloses #25\n\n<!-- incle-issue-to-pr-bot -->"},
+        )
+
+    def test_ensure_pull_request_keeps_existing_body_for_pull_request_follow_up_without_new_draft(self) -> None:
+        request = IssueRequest(
+            repository="IncleRepo/sample-repo",
+            issue_number=25,
+            issue_title="[Feature] 배경에 구름 추가",
+            issue_body="",
+            comment_body="@incle-issue-to-pr-bot 이 리뷰 반영해줘",
+            comment_author="IncleRepo",
+            comment_id=100,
+            is_pull_request=True,
+            pull_request_number=25,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with (
+                patch("app.github_pr.find_existing_pull_request", return_value="https://example.com/pull/25"),
+                patch("app.github_pr.github_request") as github_request_mock,
+            ):
+                pr_url = ensure_pull_request(
+                    repository=request.repository,
+                    branch_name="feat/25-clouds",
+                    base_branch="main",
+                    request=request,
+                    token="token",
+                    config=BotConfig(),
+                    workspace=workspace,
+                    changed_files=["index.html"],
+                    verification_commands=[],
+                )
+
+        self.assertEqual(pr_url, "https://example.com/pull/25")
+        github_request_mock.assert_not_called()
+
+    def test_branch_has_publishable_commits_fetches_remote_tracking_ref_when_missing_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with (
+                patch("app.github_pr.get_remote_branch_head", return_value="abc123"),
+                patch("app.github_pr.git_ref_exists", side_effect=[False, True]),
+                patch("app.github_pr.subprocess.run") as subprocess_run_mock,
+            ):
+                subprocess_run_mock.side_effect = [
+                    Mock(returncode=0, stdout=""),
+                    Mock(returncode=0, stdout="2\n"),
+                ]
+                has_commits = branch_has_publishable_commits(workspace, "feat/existing", "main")
+
+        self.assertTrue(has_commits)
+        fetch_call = subprocess_run_mock.call_args_list[0]
+        self.assertIn("fetch", fetch_call.args[0])
+        self.assertIn("feat/existing:refs/remotes/origin/feat/existing", fetch_call.args[0])
 
     def test_sync_pull_request_branch_with_base_detects_clean_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
