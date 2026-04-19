@@ -256,8 +256,13 @@ class AgentRunnerTest(unittest.TestCase):
         mock_report.assert_called_once_with(config, "task-3", "completed", "interrupted", "사용자가 중단했습니다.")
         self.assertTrue(any("작업 중단" in call.args[1] for call in mock_log.call_args_list))
 
+    @patch("app.agent.service.is_shallow_git_repository", return_value=False)
     @patch("app.agent.service.run_command")
-    def test_prepare_repository_workspace_resets_and_cleans_before_checkout(self, mock_run_command) -> None:
+    def test_prepare_repository_workspace_resets_and_cleans_before_checkout(
+        self,
+        mock_run_command,
+        _mock_is_shallow,
+    ) -> None:
         config = AgentConfig(
             control_plane_url="https://example.com",
             agent_token="token",
@@ -304,6 +309,84 @@ class AgentRunnerTest(unittest.TestCase):
         clean_index = commands.index(["git", "-C", str(repo_dir), "clean", "-fd"])
         self.assertLess(reset_index, checkout_index)
         self.assertLess(clean_index, checkout_index)
+
+    @patch("app.agent.service.is_shallow_git_repository", return_value=False)
+    @patch("app.agent.service.run_command")
+    def test_prepare_repository_workspace_clones_without_depth_limit(
+        self,
+        mock_run_command,
+        _mock_is_shallow,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=workspace_root,
+                log_path=Path(temp_dir) / "agent.log",
+            )
+            task = ClaimedTask(
+                task_id="task-clone",
+                event_name="issue_comment",
+                delivery_id="delivery-clone",
+                repository="IncleRepo/example",
+                default_branch="main",
+                payload={"action": "created", "comment": {"id": 1}, "issue": {"number": 9}},
+                github_token="token",
+            )
+
+            prepare_repository_workspace(config, task)
+
+        commands = [call.args[0] for call in mock_run_command.call_args_list]
+        self.assertIn(
+            ["git", "clone", "https://x-access-token:token@github.com/IncleRepo/example.git", str(workspace_root / "IncleRepo__example" / "issue-9")],
+            commands,
+        )
+
+    @patch("app.agent.service.log_message")
+    @patch("app.agent.service.run_command")
+    @patch("app.agent.service.is_shallow_git_repository", return_value=True)
+    def test_prepare_repository_workspace_unshallows_existing_repository_before_checkout(
+        self,
+        _mock_is_shallow,
+        mock_run_command,
+        _mock_log_message,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            repo_dir = workspace_root / "IncleRepo__example" / "issue-9"
+            repo_dir.mkdir(parents=True)
+            repo_dir.joinpath(".git", "info").mkdir(parents=True)
+            config = AgentConfig(
+                control_plane_url="https://example.com",
+                agent_token="token",
+                workspace_root=workspace_root,
+                log_path=Path(temp_dir) / "agent.log",
+            )
+            task = ClaimedTask(
+                task_id="task-unshallow",
+                event_name="issue_comment",
+                delivery_id="delivery-unshallow",
+                repository="IncleRepo/example",
+                default_branch="main",
+                payload={"action": "created", "comment": {"id": 1}, "issue": {"number": 9}},
+                github_token="token",
+            )
+
+            prepare_repository_workspace(config, task)
+
+        commands = [call.args[0] for call in mock_run_command.call_args_list]
+        unshallow_command = [
+            "git",
+            "-C",
+            str(repo_dir),
+            "fetch",
+            "--unshallow",
+            "https://x-access-token:token@github.com/IncleRepo/example.git",
+        ]
+        checkout_command = ["git", "-C", str(repo_dir), "checkout", "-B", "main", "FETCH_HEAD"]
+        self.assertIn(unshallow_command, commands)
+        self.assertLess(commands.index(unshallow_command), commands.index(checkout_command))
 
     def test_resolve_workspace_path_separates_issue_scopes(self) -> None:
         config = AgentConfig(
@@ -563,14 +646,14 @@ class AgentRunnerTest(unittest.TestCase):
                         "workspace_root": str(Path(temp_dir) / "work"),
                         "log_path": str(Path(temp_dir) / "agent.log"),
                         "managed_runtime_path": str(runtime_path),
-                        "managed_runtime_version": "0.3.5",
+                        "managed_runtime_version": "0.3.6",
                         "release_repository": "IncleRepo/issue-to-pr-bot",
                     }
                 ),
                 encoding="utf-8",
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent.exe"
-            mock_install.return_value = (staged_path, "updated", "0.3.5")
+            mock_install.return_value = (staged_path, "updated", "0.3.6")
 
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 run_console_update(config_path)
@@ -605,7 +688,7 @@ class AgentRunnerTest(unittest.TestCase):
             )
             staged_path = runtime_path.parent / ".staged-issue-to-pr-bot-agent"
             staged_path.write_text("new-binary", encoding="utf-8")
-            mock_install.return_value = (staged_path, "updated", "0.3.5")
+            mock_install.return_value = (staged_path, "updated", "0.3.6")
             config = AgentConfig(
                 control_plane_url="https://example.com",
                 agent_token="token",
@@ -618,7 +701,7 @@ class AgentRunnerTest(unittest.TestCase):
 
             message = install_latest_agent_runtime(config, config_path)
 
-        self.assertIn("업데이트를 예약했습니다: 0.3.5", message)
+        self.assertIn("업데이트를 예약했습니다: 0.3.6", message)
         mock_spawn_helper.assert_called_once_with(staged_path, runtime_path, config_path)
 
     def test_collect_runtime_update_wait_pids_includes_running_task_pids(self) -> None:

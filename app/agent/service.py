@@ -642,9 +642,10 @@ def prepare_repository_workspace(config: AgentConfig, task: ClaimedTask, *, log_
     public_url = f"https://github.com/{task.repository}.git"
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
-        run_command(["git", "clone", "--depth", "1", clone_url, str(target)], config, log_path=log_path)
+        run_command(["git", "clone", clone_url, str(target)], config, log_path=log_path)
     run_command(["git", "-C", str(target), "config", "core.autocrlf", "false"], config, log_path=log_path)
     run_command(["git", "-C", str(target), "remote", "set-url", "origin", public_url], config, log_path=log_path)
+    ensure_full_repository_history(target, clone_url, config, log_path=log_path)
     run_command(["git", "-C", str(target), "fetch", clone_url, task.default_branch], config, log_path=log_path)
     run_command(["git", "-C", str(target), "reset", "--hard"], config, log_path=log_path)
     run_command(["git", "-C", str(target), "clean", "-fd"], config, log_path=log_path)
@@ -660,6 +661,35 @@ def cleanup_workspace_output_artifacts(workspace: Path, repository: str) -> None
     del repository
     shutil.rmtree(get_workspace_output_artifact_root(workspace), ignore_errors=True)
     shutil.rmtree(get_legacy_workspace_output_artifact_root(workspace), ignore_errors=True)
+
+
+def ensure_full_repository_history(
+    workspace: Path,
+    clone_url: str,
+    config: AgentConfig | None = None,
+    *,
+    log_path: Path | None = None,
+) -> None:
+    if not is_shallow_git_repository(workspace):
+        return
+    log_message(config, "shallow clone workspace를 감지해 전체 git history를 가져옵니다.", log_path=log_path)
+    run_command(["git", "-C", str(workspace), "fetch", "--unshallow", clone_url], config, log_path=log_path)
+
+
+def is_shallow_git_repository(workspace: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "--is-shallow-repository"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        **build_hidden_windows_subprocess_kwargs(),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"shallow repository 상태 확인에 실패했습니다: {(result.stdout or '').strip()}")
+    return (result.stdout or "").strip().lower() == "true"
 
 
 def ensure_workspace_local_git_exclude(workspace: Path) -> None:
